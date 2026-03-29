@@ -377,6 +377,12 @@ export function TextField({
   inputProps = {},
 } = {}) {
   const resolvedId = id || field?.name;
+  const modelValue = typeof model === 'function'
+    ? model
+    : (typeof model?.get === 'function' ? () => model.get() : undefined);
+  const modelInput = typeof model?.set === 'function'
+    ? (event) => model.set(event.target.value)
+    : null;
 
   return Field(
     label ? FieldLabel(label)
@@ -387,7 +393,8 @@ export function TextField({
       beforeInput,
       Input(inputProps)
         .field(field)
-        .model(model)
+        .value(modelValue)
+        .onInput(modelInput)
         .id(resolvedId)
         .type(type)
         .placeholder(placeholder)

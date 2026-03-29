@@ -1,15 +1,12 @@
 import { beginReactiveCreationPhase, effect, endReactiveCreationPhase, isReactive, read, untrack } from './state.js';
 import { getInternalFeatherConfig } from './config.js';
-import { cx, token } from './theme.js';
+import { cx, resolveThemeProps, token } from './theme.js';
 
 const FRAGMENT = Symbol('feather.fragment');
 const FEATHER_RUNTIME_STYLE_ID = 'feather-runtime-styles';
 const SVG_NAMESPACE = 'http://www.w3.org/2000/svg';
-const MAX_BINDING_DEPTH = 1;
 const bindingWarnings = new Set();
-const NESTED_BINDING_WARNING = 'Feather: Nested bindings are not supported. Use a flat object or wrap values in a function (() => value).';
-const ARRAY_BINDING_WARNING = 'Feather: Arrays of bindings are discouraged. Keep the binding flat or wrap the value in a function (() => value).';
-const MIXED_BINDING_WARNING = 'Feather: Do not mix getter bindings and reactive values in the same binding. Pick one binding style and keep it consistent.';
+const DIRECT_REACTIVE_VALUE_WARNING = 'Feather: Reactive values must be wrapped in a function (() => value).';
 const DIRECT_REACTIVE_CHILD_WARNING = 'Feather: Pass reactive children as functions. Use Box(() => count.get()) instead of passing the reactive value directly.';
 const SVG_TAGS = new Set([
   'svg',
@@ -89,7 +86,8 @@ function flattenValue(value) {
   }
 
   if (isReactive(value)) {
-    return flattenValue(value.get());
+    warnBinding(DIRECT_REACTIVE_VALUE_WARNING);
+    return '';
   }
 
   return String(value);
@@ -162,228 +160,73 @@ function warnBinding(message) {
   console.warn(message);
 }
 
-function createBindingInfo() {
-  return {
-    hasBinding: false,
-    hasGetter: false,
-    hasReactive: false,
-    hasNested: false,
-    hasArray: false,
-  };
-}
-
-function markBindingType(value, info) {
-  if (typeof value === 'function' && value.length === 0) {
-    info.hasBinding = true;
-    info.hasGetter = true;
-    return true;
+function warnReactiveValueOutsideFunction(value, message = DIRECT_REACTIVE_VALUE_WARNING) {
+  if (typeof value === 'function') {
+    return false;
   }
 
   if (isReactive(value)) {
-    info.hasBinding = true;
-    info.hasReactive = true;
+    warnBinding(message);
+    return true;
+  }
+
+  if (Array.isArray(value) && value.some((entry) => isReactive(entry))) {
+    warnBinding(message);
+    return true;
+  }
+
+  if (isPlainObject(value) && Object.values(value).some((entry) => isReactive(entry))) {
+    warnBinding(message);
     return true;
   }
 
   return false;
 }
 
-function inspectBindingContainerEntries(entries, info) {
-  entries.forEach((entry) => {
-    if (markBindingType(entry, info)) {
-      return;
-    }
+function getBindingTargetName(key) {
+  if (key === 'class') {
+    return 'className';
+  }
 
-    if (Array.isArray(entry)) {
-      info.hasArray = true;
-      info.hasNested = true;
-      entry.forEach((nestedEntry) => {
-        if (markBindingType(nestedEntry, info)) {
-          return;
-        }
-
-        if (Array.isArray(nestedEntry) || isPlainObject(nestedEntry)) {
-          info.hasNested = true;
-        }
-      });
-      return;
-    }
-
-    if (isPlainObject(entry)) {
-      info.hasNested = true;
-      Object.values(entry).forEach((nestedEntry) => {
-        if (markBindingType(nestedEntry, info)) {
-          return;
-        }
-
-        if (Array.isArray(nestedEntry)) {
-          info.hasArray = true;
-          info.hasNested = true;
-          return;
-        }
-
-        if (isPlainObject(nestedEntry)) {
-          info.hasNested = true;
-        }
-      });
-    }
-  });
+  return key;
 }
 
-function inspectBinding(value, info, depth = 0) {
-  if (markBindingType(value, info)) {
-    return;
+function applyBinding(value, apply) {
+  if (typeof value === 'function') {
+    return effect(() => apply(value()));
   }
 
-  if (Array.isArray(value)) {
-    info.hasArray = true;
-    if (depth >= MAX_BINDING_DEPTH) {
-      info.hasNested = true;
-      inspectBindingContainerEntries(value, info);
-      return;
-    }
-
-    value.forEach((entry) => inspectBinding(entry, info, depth + 1));
-    return;
-  }
-
-  if (isPlainObject(value)) {
-    if (depth >= MAX_BINDING_DEPTH) {
-      info.hasNested = true;
-      inspectBindingContainerEntries(Object.values(value), info);
-      return;
-    }
-
-    Object.values(value).forEach((entry) => inspectBinding(entry, info, depth + 1));
-  }
+  return apply(value);
 }
 
-function getBindingInfo(value, { warn = true } = {}) {
-  const info = createBindingInfo();
-  inspectBinding(value, info);
+function resolveFieldBindings(props = {}) {
+  const { field, onInput, onChange, type, checked, value, ...rest } = props;
 
-  if (warn && info.hasBinding) {
-    if (info.hasNested) {
-      warnBinding(NESTED_BINDING_WARNING);
-    }
-
-    if (info.hasArray) {
-      warnBinding(ARRAY_BINDING_WARNING);
-    }
-
-    if (info.hasGetter && info.hasReactive) {
-      warnBinding(MIXED_BINDING_WARNING);
-    }
+  if (!field) {
+    return mergeProps(rest, {
+      type: type === undefined ? (typeof type === 'function' ? type() : type) : type,
+      checked,
+      value,
+      onInput,
+      onChange,
+    });
   }
 
-  return info;
-}
-
-function isBindingGetter(value) {
-  return getBindingInfo(value, { warn: false }).hasGetter;
-}
-
-function isBinding(value) {
-  return getBindingInfo(value, { warn: false }).hasBinding;
-}
-
-function unwrapBinding(value, depth = 0) {
-  if (typeof value === 'function' && value.length === 0) {
-    return unwrapBinding(value(), depth);
-  }
-
-  if (isReactive(value)) {
-    return unwrapBinding(value.get(), depth);
-  }
-
-  if (Array.isArray(value)) {
-    if (depth >= MAX_BINDING_DEPTH) {
-      if (isBinding(value)) {
-        warnBinding(NESTED_BINDING_WARNING);
-      }
-      return value;
-    }
-
-    return value.map((entry) => unwrapBinding(entry, depth + 1));
-  }
-
-  if (isPlainObject(value)) {
-    if (depth >= MAX_BINDING_DEPTH) {
-      if (isBinding(value)) {
-        warnBinding(NESTED_BINDING_WARNING);
-      }
-      return value;
-    }
-
-    return Object.fromEntries(
-      Object.entries(value).map(([key, entryValue]) => [key, unwrapBinding(entryValue, depth + 1)]),
-    );
-  }
-
-  return value;
-}
-
-function createBindingGetter(value, legacyMessage = null) {
-  const bindingInfo = getBindingInfo(value);
-  if (!bindingInfo.hasBinding) {
-    return null;
-  }
-
-  if (legacyMessage && bindingInfo.hasReactive && !bindingInfo.hasGetter && !bindingInfo.hasNested) {
-    warnBinding(legacyMessage);
-  }
-
-  return () => unwrapBinding(value);
-}
-
-function resolveBindingValue(value, legacyMessage = null) {
-  const bindingGetter = createBindingGetter(value, legacyMessage);
-  return bindingGetter ? bindingGetter() : value;
-}
-
-function mapBinding(value, mapper, legacyMessage = null) {
-  const bindingGetter = createBindingGetter(value, legacyMessage);
-  return bindingGetter
-    ? () => mapper(bindingGetter())
-    : mapper(resolveBindingValue(value));
-}
-
-function mapJoinedBinding(parts, mapper) {
-  if (parts.some((entry) => isBinding(entry))) {
-    return () => mapper(parts.map((entry) => resolveBindingValue(entry)));
-  }
-
-  return mapper(parts.map((entry) => resolveBindingValue(entry)));
-}
-
-function resolveModelBindings(props = {}) {
-  const { model, field, onInput, onChange, type, checked, value, ...rest } = props;
-  const binding = field || model;
-
-  if (!binding) {
-    return props;
-  }
-
-  const currentType = resolveBindingValue(type);
+  const currentType = typeof type === 'function' ? type() : type;
   const nextType = type === undefined ? currentType : type;
   const isCheckboxLike = currentType === 'checkbox' || currentType === 'radio';
-  const modelBinding = isReactive(model) ? () => model.get() : model;
   const invalidAttrs = field?.invalid
-    ? { 'aria-invalid': () => field.invalid.get() }
+    ? () => ({ 'aria-invalid': field.invalid.get() })
     : null;
 
   if (isCheckboxLike) {
     return mergeProps(rest, {
       type: nextType,
-      checked: field ? () => field.value.get() : (modelBinding || checked),
+      checked: () => field.value.get(),
       onChange: composeHandlers((event) => {
-        if (binding?.set) {
-          binding.set(Boolean(event.target.checked));
-        }
+        field.set(Boolean(event.target.checked));
 
-        if (field?.touch) {
-          field.touch();
-        }
+        field.touch?.();
       }, onChange),
       attrs: invalidAttrs,
     });
@@ -391,15 +234,10 @@ function resolveModelBindings(props = {}) {
 
   return mergeProps(rest, {
     type: nextType,
-    value: field ? () => field.value.get() : (modelBinding || value),
+    value: () => field.value.get(),
     onInput: composeHandlers((event) => {
-      if (binding?.set) {
-        binding.set(event.target.value);
-      }
-
-      if (field?.touch) {
-        field.touch();
-      }
+      field.set(event.target.value);
+      field.touch?.();
     }, onInput),
     onChange,
     attrs: invalidAttrs,
@@ -423,20 +261,45 @@ function resolveFormProps(props = {}) {
   });
 }
 
-function resolveSemanticClass(group, value, fallbackPrefix) {
-  return mapBinding(value, (resolvedValue) => {
-    const semanticClass = token(`${group}.${resolvedValue}`);
+function createMemoizedResolver(resolve) {
+  let initialized = false;
+  let previousValue;
+  let previousResult;
 
-    if (semanticClass) {
-      return semanticClass;
+  return (value) => {
+    if (initialized && Object.is(previousValue, value)) {
+      return previousResult;
+    }
+
+    initialized = true;
+    previousValue = value;
+    previousResult = resolve(value);
+    return previousResult;
+  };
+}
+
+function resolveSemanticThemeProps(group, value, fallbackPrefix) {
+  const resolveSemanticValue = createMemoizedResolver((resolvedValue) => {
+    const themeProps = resolveThemeProps(token(`${group}.${resolvedValue}`));
+    if (themeProps) {
+      return themeProps;
     }
 
     if (!fallbackPrefix || resolvedValue === null || resolvedValue === undefined || resolvedValue === false) {
-      return '';
+      return {};
     }
 
-    return `${fallbackPrefix}-${resolvedValue}`;
+    return { className: `${fallbackPrefix}-${resolvedValue}` };
   });
+
+  if (typeof value !== 'function') {
+    return resolveSemanticValue(value);
+  }
+
+  return {
+    className: () => resolveSemanticValue(value()).className,
+    style: () => resolveSemanticValue(value()).style,
+  };
 }
 
 function resolveTailwindSize(prefix, value) {
@@ -479,19 +342,27 @@ function resolveAlignClass(value) {
 }
 
 function resolveAnimateClass(value = 'pulse') {
-  return mapBinding(value, (resolvedValue) => {
-    const semanticAnimation = token(`animation.${resolvedValue}`);
-
-    if (semanticAnimation) {
-      return semanticAnimation;
+  const resolveAnimation = createMemoizedResolver((resolvedValue) => {
+    const themeProps = resolveThemeProps(token(`animation.${resolvedValue}`));
+    if (themeProps) {
+      return themeProps;
     }
 
     if (String(resolvedValue).startsWith('animate-')) {
-      return String(resolvedValue);
+      return { className: String(resolvedValue) };
     }
 
-    return `animate-${resolvedValue}`;
+    return { className: `animate-${resolvedValue}` };
   });
+
+  if (typeof value !== 'function') {
+    return resolveAnimation(value);
+  }
+
+  return {
+    className: () => resolveAnimation(value()).className,
+    style: () => resolveAnimation(value()).style,
+  };
 }
 
 function runCleanups(cleanups) {
@@ -642,6 +513,21 @@ function resolveBoxModelStyles(property, args) {
   if (args.length === 1) {
     const [value] = args;
 
+    if (typeof value === 'function') {
+      return () => {
+        const resolvedValue = value();
+        if (isPlainStyleObject(resolvedValue)) {
+          const styles = {};
+          Object.entries(resolvedValue).forEach(([key, entryValue]) => {
+            assignDirectionalStyles(property, key, entryValue, styles);
+          });
+          return styles;
+        }
+
+        return { [property]: resolvedValue };
+      };
+    }
+
     if (isPlainStyleObject(value)) {
       const styles = {};
       Object.entries(value).forEach(([key, entryValue]) => {
@@ -655,16 +541,29 @@ function resolveBoxModelStyles(property, args) {
 
   if (typeof args[0] === 'string') {
     const [key, value] = args;
+    if (typeof value === 'function') {
+      return () => {
+        const resolvedValue = value();
+        const styles = {};
+        assignDirectionalStyles(property, key, resolvedValue, styles);
+        return styles;
+      };
+    }
+
     const styles = {};
     assignDirectionalStyles(property, key, value, styles);
     return styles;
   }
 
-  if (args.some(isBinding)) {
-    return { [property]: mapJoinedBinding(args, (values) => values.join(' ')) };
+  if (args.some((value) => typeof value === 'function')) {
+    return () => {
+      const styles = {};
+      styles[property] = args.map((value) => (typeof value === 'function' ? value() : value)).join(' ');
+      return styles;
+    };
   }
 
-  return { [property]: args.map((value) => resolveBindingValue(value)).join(' ') };
+  return { [property]: args.join(' ') };
 }
 
 function resolveShadowValue(args) {
@@ -674,6 +573,26 @@ function resolveShadowValue(args) {
 
   if (args.length === 1) {
     const [value] = args;
+
+    if (typeof value === 'function') {
+      return () => {
+        const resolvedValue = value();
+        if (!isPlainStyleObject(resolvedValue)) {
+          return resolvedValue;
+        }
+
+        const {
+          inset = false,
+          x = 0,
+          y = 0,
+          blur = 0,
+          spread = 0,
+          color = 'currentColor',
+        } = resolvedValue;
+
+        return `${inset ? 'inset ' : ''}${x} ${y} ${blur} ${spread} ${color}`.trim();
+      };
+    }
 
     if (isPlainStyleObject(value)) {
       const {
@@ -685,24 +604,17 @@ function resolveShadowValue(args) {
         color = 'currentColor',
       } = value;
 
-      if ([inset, x, y, blur, spread, color].some(isBinding)) {
-        return mapJoinedBinding(
-          [inset, x, y, blur, spread, color],
-          ([nextInset, nextX, nextY, nextBlur, nextSpread, nextColor]) => `${nextInset ? 'inset ' : ''}${nextX} ${nextY} ${nextBlur} ${nextSpread} ${nextColor}`.trim(),
-        );
-      }
-
-      return `${resolveBindingValue(inset) ? 'inset ' : ''}${resolveBindingValue(x)} ${resolveBindingValue(y)} ${resolveBindingValue(blur)} ${resolveBindingValue(spread)} ${resolveBindingValue(color)}`.trim();
+      return `${inset ? 'inset ' : ''}${x} ${y} ${blur} ${spread} ${color}`.trim();
     }
 
-    return resolveBindingValue(value);
+    return value;
   }
 
-  if (args.some(isBinding)) {
-    return mapJoinedBinding(args, (values) => values.join(' '));
+  if (args.some((value) => typeof value === 'function')) {
+    return () => args.map((value) => (typeof value === 'function' ? value() : value)).join(' ');
   }
 
-  return args.map((value) => resolveBindingValue(value)).join(' ');
+  return args.join(' ');
 }
 
 function addAttributes(node, nextAttributes) {
@@ -716,9 +628,9 @@ function addAttributes(node, nextAttributes) {
 function setDatasetEntry(node, key, value) {
   return cloneNode(node, {
     props: {
-      dataset: {
-        [key]: value,
-      },
+      dataset: typeof value === 'function'
+        ? () => ({ [key]: value() })
+        : { [key]: value },
     },
   });
 }
@@ -743,6 +655,12 @@ function setNodeProp(node, key, value) {
 function setNodeProps(node, nextProps) {
   return cloneNode(node, {
     props: nextProps,
+  });
+}
+
+function addThemedProps(node, themedProps) {
+  return cloneNode(node, {
+    props: themedProps,
   });
 }
 
@@ -790,11 +708,11 @@ function withModifiers(node) {
 
     return node;
   });
-  addModifierMethod(node, 'when', (condition, applyWhenTrue) => (resolveBindingValue(condition)
+  addModifierMethod(node, 'when', (condition, applyWhenTrue) => ((typeof condition === 'function' ? condition() : condition)
     ? (typeof applyWhenTrue === 'function' ? applyWhenTrue(node) : node)
     : node));
   addModifierMethod(node, 'if', (condition, truthyValue, falsyValue = null) => {
-    if (resolveBindingValue(condition)) {
+    if (typeof condition === 'function' ? condition() : condition) {
       return typeof truthyValue === 'function' ? truthyValue(node) : truthyValue || node;
     }
 
@@ -802,11 +720,11 @@ function withModifiers(node) {
   });
   addModifierMethod(node, 'as', (value) => withModifiers({
     ...cloneNode(node),
-    nodeType: resolveBindingValue(value) || node.nodeType,
+    nodeType: (typeof value === 'function' ? value() : value) || node.nodeType,
   }));
-  addModifierMethod(node, 'aria', (key, value = true) => addAttributes(node, {
-    [`aria-${String(key).replace(/^aria-/, '')}`]: value,
-  }));
+  addModifierMethod(node, 'aria', (key, value = true) => addAttributes(node, typeof value === 'function'
+    ? () => ({ [`aria-${String(key).replace(/^aria-/, '')}`]: value() })
+    : { [`aria-${String(key).replace(/^aria-/, '')}`]: value }));
   addModifierMethod(node, 'ariaInvalid', (value = true) => node.aria('invalid', value));
   addModifierMethod(node, 'ariaLabel', (value) => node.aria('label', value));
   addModifierMethod(node, 'ariaLabelledBy', (value) => node.aria('labelledby', value));
@@ -814,51 +732,61 @@ function withModifiers(node) {
   addModifierMethod(node, 'ariaHidden', (value = true) => node.aria('hidden', value));
   addModifierMethod(node, 'className', (value) => addClass(node, value));
   addModifierMethod(node, 'class', (value) => addClass(node, value));
-  addModifierMethod(node, 'toggleClass', (name, condition = true) => addClass(node, {
-    [name]: condition,
-  }));
+  addModifierMethod(node, 'toggleClass', (name, condition = true) => addClass(node, typeof condition === 'function'
+    ? () => ({ [name]: condition() })
+    : { [name]: condition }));
   addModifierMethod(node, 'tw', (...values) => addClass(node, values.filter(Boolean).join(' ')));
   addModifierMethod(node, 'style', (value) => addStyles(node, value));
   addModifierMethod(node, 'padding', (...args) => addStyleEntries(node, resolveBoxModelStyles('padding', args)));
-  addModifierMethod(node, 'paddingRight', (value) => addStyleEntries(node, { paddingRight: value }));
-  addModifierMethod(node, 'paddingLeft', (value) => addStyleEntries(node, { paddingLeft: value }));
-  addModifierMethod(node, 'paddingTop', (value) => addStyleEntries(node, { paddingTop: value }));
-  addModifierMethod(node, 'paddingBottom', (value) => addStyleEntries(node, { paddingBottom: value }));
+  addModifierMethod(node, 'paddingRight', (value) => addStyleEntries(node, typeof value === 'function' ? () => ({ paddingRight: value() }) : { paddingRight: value }));
+  addModifierMethod(node, 'paddingLeft', (value) => addStyleEntries(node, typeof value === 'function' ? () => ({ paddingLeft: value() }) : { paddingLeft: value }));
+  addModifierMethod(node, 'paddingTop', (value) => addStyleEntries(node, typeof value === 'function' ? () => ({ paddingTop: value() }) : { paddingTop: value }));
+  addModifierMethod(node, 'paddingBottom', (value) => addStyleEntries(node, typeof value === 'function' ? () => ({ paddingBottom: value() }) : { paddingBottom: value }));
   addModifierMethod(node, 'margin', (...args) => addStyleEntries(node, resolveBoxModelStyles('margin', args)));
-  addModifierMethod(node, 'gap', (value) => addStyleEntries(node, { gap: value }));
-  addModifierMethod(node, 'rowGap', (value) => addStyleEntries(node, { rowGap: value }));
-  addModifierMethod(node, 'columnGap', (value) => addStyleEntries(node, { columnGap: value }));
-  addModifierMethod(node, 'textAlign', (value) => addStyleEntries(node, { textAlign: value }));
-  addModifierMethod(node, 'justifyContent', (value) => addStyleEntries(node, { justifyContent: value }));
-  addModifierMethod(node, 'alignItems', (value) => addStyleEntries(node, { alignItems: value }));
-  addModifierMethod(node, 'alignSelf', (value) => addStyleEntries(node, { alignSelf: value }));
-  addModifierMethod(node, 'placeItems', (value) => addStyleEntries(node, { placeItems: value }));
-  addModifierMethod(node, 'display', (value) => addStyleEntries(node, { display: value }));
-  addModifierMethod(node, 'position', (value) => addStyleEntries(node, { position: value }));
-  addModifierMethod(node, 'top', (value) => addStyleEntries(node, { top: value }));
-  addModifierMethod(node, 'right', (value) => addStyleEntries(node, { right: value }));
-  addModifierMethod(node, 'bottom', (value) => addStyleEntries(node, { bottom: value }));
-  addModifierMethod(node, 'left', (value) => addStyleEntries(node, { left: value }));
-  addModifierMethod(node, 'inset', (value) => addStyleEntries(node, { inset: value }));
-  addModifierMethod(node, 'overflow', (value) => addStyleEntries(node, { overflow: value }));
-  addModifierMethod(node, 'overflowX', (value) => addStyleEntries(node, { overflowX: value }));
-  addModifierMethod(node, 'overflowY', (value) => addStyleEntries(node, { overflowY: value }));
-  addModifierMethod(node, 'opacity', (value) => addStyleEntries(node, { opacity: value }));
-  addModifierMethod(node, 'fontSize', (value) => addStyleEntries(node, { fontSize: value }));
-  addModifierMethod(node, 'fontWeight', (value) => addStyleEntries(node, { fontWeight: value }));
-  addModifierMethod(node, 'lineHeight', (value) => addStyleEntries(node, { lineHeight: value }));
-  addModifierMethod(node, 'letterSpacing', (value) => addStyleEntries(node, { letterSpacing: value }));
-  addModifierMethod(node, 'color', (value) => addStyleEntries(node, { color: value }));
-  addModifierMethod(node, 'backgroundColor', (value) => addStyleEntries(node, { backgroundColor: value }));
+  addModifierMethod(node, 'gap', (value) => addStyleEntries(node, typeof value === 'function' ? () => ({ gap: value() }) : { gap: value }));
+  addModifierMethod(node, 'rowGap', (value) => addStyleEntries(node, typeof value === 'function' ? () => ({ rowGap: value() }) : { rowGap: value }));
+  addModifierMethod(node, 'columnGap', (value) => addStyleEntries(node, typeof value === 'function' ? () => ({ columnGap: value() }) : { columnGap: value }));
+  addModifierMethod(node, 'textAlign', (value) => addStyleEntries(node, typeof value === 'function' ? () => ({ textAlign: value() }) : { textAlign: value }));
+  addModifierMethod(node, 'justifyContent', (value) => addStyleEntries(node, typeof value === 'function' ? () => ({ justifyContent: value() }) : { justifyContent: value }));
+  addModifierMethod(node, 'alignItems', (value) => addStyleEntries(node, typeof value === 'function' ? () => ({ alignItems: value() }) : { alignItems: value }));
+  addModifierMethod(node, 'alignSelf', (value) => addStyleEntries(node, typeof value === 'function' ? () => ({ alignSelf: value() }) : { alignSelf: value }));
+  addModifierMethod(node, 'placeItems', (value) => addStyleEntries(node, typeof value === 'function' ? () => ({ placeItems: value() }) : { placeItems: value }));
+  addModifierMethod(node, 'display', (value) => addStyleEntries(node, typeof value === 'function' ? () => ({ display: value() }) : { display: value }));
+  addModifierMethod(node, 'position', (value) => addStyleEntries(node, typeof value === 'function' ? () => ({ position: value() }) : { position: value }));
+  addModifierMethod(node, 'top', (value) => addStyleEntries(node, typeof value === 'function' ? () => ({ top: value() }) : { top: value }));
+  addModifierMethod(node, 'right', (value) => addStyleEntries(node, typeof value === 'function' ? () => ({ right: value() }) : { right: value }));
+  addModifierMethod(node, 'bottom', (value) => addStyleEntries(node, typeof value === 'function' ? () => ({ bottom: value() }) : { bottom: value }));
+  addModifierMethod(node, 'left', (value) => addStyleEntries(node, typeof value === 'function' ? () => ({ left: value() }) : { left: value }));
+  addModifierMethod(node, 'inset', (value) => addStyleEntries(node, typeof value === 'function' ? () => ({ inset: value() }) : { inset: value }));
+  addModifierMethod(node, 'overflow', (value) => addStyleEntries(node, typeof value === 'function' ? () => ({ overflow: value() }) : { overflow: value }));
+  addModifierMethod(node, 'overflowX', (value) => addStyleEntries(node, typeof value === 'function' ? () => ({ overflowX: value() }) : { overflowX: value }));
+  addModifierMethod(node, 'overflowY', (value) => addStyleEntries(node, typeof value === 'function' ? () => ({ overflowY: value() }) : { overflowY: value }));
+  addModifierMethod(node, 'opacity', (value) => addStyleEntries(node, typeof value === 'function' ? () => ({ opacity: value() }) : { opacity: value }));
+  addModifierMethod(node, 'fontSize', (value) => addStyleEntries(node, typeof value === 'function' ? () => ({ fontSize: value() }) : { fontSize: value }));
+  addModifierMethod(node, 'fontWeight', (value) => addStyleEntries(node, typeof value === 'function' ? () => ({ fontWeight: value() }) : { fontWeight: value }));
+  addModifierMethod(node, 'lineHeight', (value) => addStyleEntries(node, typeof value === 'function' ? () => ({ lineHeight: value() }) : { lineHeight: value }));
+  addModifierMethod(node, 'letterSpacing', (value) => addStyleEntries(node, typeof value === 'function' ? () => ({ letterSpacing: value() }) : { letterSpacing: value }));
+  addModifierMethod(node, 'color', (value) => addStyleEntries(node, typeof value === 'function' ? () => ({ color: value() }) : { color: value }));
+  addModifierMethod(node, 'backgroundColor', (value) => addStyleEntries(node, typeof value === 'function' ? () => ({ backgroundColor: value() }) : { backgroundColor: value }));
   addModifierMethod(node, 'borderRadius', (...args) => addStyleEntries(node, resolveBoxModelStyles('borderRadius', args)));
-  addModifierMethod(node, 'borderColor', (value) => addStyleEntries(node, { borderColor: value }));
-  addModifierMethod(node, 'borderWidth', (value) => addStyleEntries(node, { borderWidth: value }));
-  addModifierMethod(node, 'boxShadow', (...args) => addStyleEntries(node, { boxShadow: resolveShadowValue(args) }));
-  addModifierMethod(node, 'shadow', (...args) => addStyleEntries(node, { boxShadow: resolveShadowValue(args) }));
-  addModifierMethod(node, 'transform', (value) => addStyleEntries(node, { transform: value }));
-  addModifierMethod(node, 'transition', (value) => addStyleEntries(node, { transition: value }));
-  addModifierMethod(node, 'pointerEvents', (value) => addStyleEntries(node, { pointerEvents: value }));
-  addModifierMethod(node, 'cursor', (value) => addStyleEntries(node, { cursor: value }));
+  addModifierMethod(node, 'borderColor', (value) => addStyleEntries(node, typeof value === 'function' ? () => ({ borderColor: value() }) : { borderColor: value }));
+  addModifierMethod(node, 'borderWidth', (value) => addStyleEntries(node, typeof value === 'function' ? () => ({ borderWidth: value() }) : { borderWidth: value }));
+  addModifierMethod(node, 'boxShadow', (...args) => {
+    const shadowValue = resolveShadowValue(args);
+    return addStyleEntries(node, typeof shadowValue === 'function'
+      ? () => ({ boxShadow: shadowValue() })
+      : { boxShadow: shadowValue });
+  });
+  addModifierMethod(node, 'shadow', (...args) => {
+    const shadowValue = resolveShadowValue(args);
+    return addStyleEntries(node, typeof shadowValue === 'function'
+      ? () => ({ boxShadow: shadowValue() })
+      : { boxShadow: shadowValue });
+  });
+  addModifierMethod(node, 'transform', (value) => addStyleEntries(node, typeof value === 'function' ? () => ({ transform: value() }) : { transform: value }));
+  addModifierMethod(node, 'transition', (value) => addStyleEntries(node, typeof value === 'function' ? () => ({ transition: value() }) : { transition: value }));
+  addModifierMethod(node, 'pointerEvents', (value) => addStyleEntries(node, typeof value === 'function' ? () => ({ pointerEvents: value() }) : { pointerEvents: value }));
+  addModifierMethod(node, 'cursor', (value) => addStyleEntries(node, typeof value === 'function' ? () => ({ cursor: value() }) : { cursor: value }));
   addModifierMethod(node, 'id', (value) => setNodeProp(node, 'id', value));
   addModifierMethod(node, 'name', (value) => setNodeProp(node, 'name', value));
   addModifierMethod(node, 'type', (value) => setNodeProp(node, 'type', value));
@@ -867,7 +795,6 @@ function withModifiers(node) {
   addModifierMethod(node, 'placeholder', (value) => setNodeProp(node, 'placeholder', value));
   addModifierMethod(node, 'autocomplete', (value) => setNodeProp(node, 'autocomplete', value));
   addModifierMethod(node, 'field', (value) => setNodeProp(node, 'field', value));
-  addModifierMethod(node, 'model', (value) => setNodeProp(node, 'model', value));
   addModifierMethod(node, 'form', (value) => setNodeProp(node, 'form', value));
   addModifierMethod(node, 'href', (value) => setNodeProp(node, 'href', value));
   addModifierMethod(node, 'src', (value) => setNodeProp(node, 'src', value));
@@ -876,7 +803,9 @@ function withModifiers(node) {
   addModifierMethod(node, 'html', (value) => setNodeProp(node, 'html', value));
   addModifierMethod(node, 'ref', (value) => setNodeProp(node, 'ref', value));
   addModifierMethod(node, 'routerLink', (value = true) => setNodeProp(node, 'routerLink', value));
-  addModifierMethod(node, 'attr', (key, value) => addAttributes(node, { [key]: value }));
+  addModifierMethod(node, 'attr', (key, value) => addAttributes(node, typeof value === 'function'
+    ? () => ({ [key]: value() })
+    : { [key]: value }));
   addModifierMethod(node, 'attrs', (value) => addAttributes(node, value));
   addModifierMethod(node, 'data', (key, value) => setDatasetEntry(node, key, value));
   addModifierMethod(node, 'slot', (name, child = null) => {
@@ -913,39 +842,41 @@ function withModifiers(node) {
   addModifierMethod(node, 'disabledWhen', (value = true) => node.disabled(value));
   addModifierMethod(node, 'submit', () => cloneNode(node, { props: { type: 'submit' } }));
 
-  addModifierMethod(node, 'width', (value) => addStyleEntries(node, { width: value }));
-  addModifierMethod(node, 'height', (value) => addStyleEntries(node, { height: value }));
-  addModifierMethod(node, 'minWidth', (value) => addStyleEntries(node, { minWidth: value }));
-  addModifierMethod(node, 'minHeight', (value) => addStyleEntries(node, { minHeight: value }));
-  addModifierMethod(node, 'maxWidth', (value) => addStyleEntries(node, { maxWidth: value }));
-  addModifierMethod(node, 'maxHeight', (value) => addStyleEntries(node, { maxHeight: value }));
-  addModifierMethod(node, 'widthClass', (value) => addClass(node, mapBinding(value, (nextValue) => resolveTailwindSize('w', nextValue))));
-  addModifierMethod(node, 'heightClass', (value) => addClass(node, mapBinding(value, (nextValue) => resolveTailwindSize('h', nextValue))));
-  addModifierMethod(node, 'minWidthClass', (value) => addClass(node, mapBinding(value, (nextValue) => resolveTailwindSize('min-w', nextValue))));
-  addModifierMethod(node, 'minHeightClass', (value) => addClass(node, mapBinding(value, (nextValue) => resolveTailwindSize('min-h', nextValue))));
-  addModifierMethod(node, 'maxWidthClass', (value) => addClass(node, mapBinding(value, (nextValue) => resolveTailwindSize('max-w', nextValue))));
-  addModifierMethod(node, 'maxHeightClass', (value) => addClass(node, mapBinding(value, (nextValue) => resolveTailwindSize('max-h', nextValue))));
-  addModifierMethod(node, 'rounded', (value = 'md') => addClass(node, mapBinding(value, (nextValue) => (nextValue === 'none' ? 'rounded-none' : `rounded-${nextValue}`))));
-  addModifierMethod(node, 'background', (value) => addClass(node, resolveSemanticClass('background', value, 'bg')));
-  addModifierMethod(node, 'textColor', (value) => addClass(node, resolveSemanticClass('text', value, 'text')));
-  addModifierMethod(node, 'border', (value = true) => addClass(node, mapBinding(value, (nextValue) => (nextValue === true ? 'border' : `border-${nextValue}`))));
-  addModifierMethod(node, 'borderColorClass', (value) => addClass(node, resolveSemanticClass('border', value, 'border')));
-  addModifierMethod(node, 'opacityClass', (value) => addClass(node, mapBinding(value, (nextValue) => `opacity-${nextValue}`)));
-  addModifierMethod(node, 'displayClass', (value) => addClass(node, mapBinding(value, (nextValue) => String(nextValue))));
-  addModifierMethod(node, 'font', (value) => addClass(node, mapBinding(value, (nextValue) => `font-${nextValue}`)));
-  addModifierMethod(node, 'textSize', (value) => addClass(node, mapBinding(value, (nextValue) => `text-${nextValue}`)));
-  addModifierMethod(node, 'leading', (value) => addClass(node, mapBinding(value, (nextValue) => `leading-${nextValue}`)));
-  addModifierMethod(node, 'tracking', (value) => addClass(node, mapBinding(value, (nextValue) => `tracking-${nextValue}`)));
-  addModifierMethod(node, 'justify', (value) => addClass(node, mapBinding(value, (nextValue) => resolveJustifyClass(nextValue))));
-  addModifierMethod(node, 'align', (value) => addClass(node, mapBinding(value, (nextValue) => resolveAlignClass(nextValue))));
-  addModifierMethod(node, 'items', (value) => addClass(node, mapBinding(value, (nextValue) => `items-${nextValue}`)));
-  addModifierMethod(node, 'self', (value) => addClass(node, mapBinding(value, (nextValue) => `self-${nextValue}`)));
-  addModifierMethod(node, 'grow', (value = true) => addClass(node, mapBinding(value, (nextValue) => (nextValue === true ? 'grow' : `grow-${nextValue}`))));
-  addModifierMethod(node, 'shrink', (value = true) => addClass(node, mapBinding(value, (nextValue) => (nextValue === true ? 'shrink' : `shrink-${nextValue}`))));
-  addModifierMethod(node, 'transitionClass', (value = 'colors') => addClass(node, mapBinding(value, (nextValue) => `transition-${nextValue === 'colors' ? 'colors' : nextValue}`)));
-  addModifierMethod(node, 'duration', (value) => addClass(node, mapBinding(value, (nextValue) => `duration-${nextValue}`)));
-  addModifierMethod(node, 'ease', (value = 'out') => addClass(node, mapBinding(value, (nextValue) => (String(nextValue).startsWith('ease-') ? String(nextValue) : `ease-${nextValue}`))));
-  addModifierMethod(node, 'animate', (value = 'pulse') => addClass(node, resolveAnimateClass(value)));
+  addModifierMethod(node, 'width', (value) => addStyleEntries(node, typeof value === 'function' ? () => ({ width: value() }) : { width: value }));
+  addModifierMethod(node, 'height', (value) => addStyleEntries(node, typeof value === 'function' ? () => ({ height: value() }) : { height: value }));
+  addModifierMethod(node, 'minWidth', (value) => addStyleEntries(node, typeof value === 'function' ? () => ({ minWidth: value() }) : { minWidth: value }));
+  addModifierMethod(node, 'minHeight', (value) => addStyleEntries(node, typeof value === 'function' ? () => ({ minHeight: value() }) : { minHeight: value }));
+  addModifierMethod(node, 'maxWidth', (value) => addStyleEntries(node, typeof value === 'function' ? () => ({ maxWidth: value() }) : { maxWidth: value }));
+  addModifierMethod(node, 'maxHeight', (value) => addStyleEntries(node, typeof value === 'function' ? () => ({ maxHeight: value() }) : { maxHeight: value }));
+  addModifierMethod(node, 'widthClass', (value) => addClass(node, (typeof value === 'function') ? () => resolveTailwindSize('w', value()) : resolveTailwindSize('w', value)));
+  addModifierMethod(node, 'heightClass', (value) => addClass(node, (typeof value === 'function') ? () => resolveTailwindSize('h', value()) : resolveTailwindSize('h', value)));
+  addModifierMethod(node, 'minWidthClass', (value) => addClass(node, (typeof value === 'function') ? () => resolveTailwindSize('min-w', value()) : resolveTailwindSize('min-w', value)));
+  addModifierMethod(node, 'minHeightClass', (value) => addClass(node, (typeof value === 'function') ? () => resolveTailwindSize('min-h', value()) : resolveTailwindSize('min-h', value)));
+  addModifierMethod(node, 'maxWidthClass', (value) => addClass(node, (typeof value === 'function') ? () => resolveTailwindSize('max-w', value()) : resolveTailwindSize('max-w', value)));
+  addModifierMethod(node, 'maxHeightClass', (value) => addClass(node, (typeof value === 'function') ? () => resolveTailwindSize('max-h', value()) : resolveTailwindSize('max-h', value)));
+  addModifierMethod(node, 'rounded', (value = 'md') => addClass(node, (typeof value === 'function') ? () => (value() === 'none' ? 'rounded-none' : `rounded-${value()}`) : (value === 'none' ? 'rounded-none' : `rounded-${value}`)));
+  addModifierMethod(node, 'background', (value) => addThemedProps(node, resolveSemanticThemeProps('background', value, 'bg')));
+  addModifierMethod(node, 'textColor', (value) => addThemedProps(node, resolveSemanticThemeProps('text', value, 'text')));
+  addModifierMethod(node, 'border', (value = true) => addClass(node, (typeof value === 'function') ? () => (value() === true ? 'border' : `border-${value()}`) : (value === true ? 'border' : `border-${value}`)));
+  addModifierMethod(node, 'borderColorClass', (value) => addThemedProps(node, resolveSemanticThemeProps('border', value, 'border')));
+  addModifierMethod(node, 'opacityClass', (value) => addClass(node, (typeof value === 'function') ? () => `opacity-${value()}` : `opacity-${value}`));
+  addModifierMethod(node, 'displayClass', (value) => addClass(node, (typeof value === 'function') ? () => String(value()) : String(value)));
+  addModifierMethod(node, 'font', (value) => addClass(node, (typeof value === 'function') ? () => `font-${value()}` : `font-${value}`));
+  addModifierMethod(node, 'textSize', (value) => addClass(node, (typeof value === 'function') ? () => `text-${value()}` : `text-${value}`));
+  addModifierMethod(node, 'leading', (value) => addClass(node, (typeof value === 'function') ? () => `leading-${value()}` : `leading-${value}`));
+  addModifierMethod(node, 'tracking', (value) => addClass(node, (typeof value === 'function') ? () => `tracking-${value()}` : `tracking-${value}`));
+  addModifierMethod(node, 'justify', (value) => addClass(node, (typeof value === 'function') ? () => resolveJustifyClass(value()) : resolveJustifyClass(value)));
+  addModifierMethod(node, 'align', (value) => addClass(node, (typeof value === 'function') ? () => resolveAlignClass(value()) : resolveAlignClass(value)));
+  addModifierMethod(node, 'items', (value) => addClass(node, (typeof value === 'function') ? () => `items-${value()}` : `items-${value}`));
+  addModifierMethod(node, 'self', (value) => addClass(node, (typeof value === 'function') ? () => `self-${value()}` : `self-${value}`));
+  addModifierMethod(node, 'grow', (value = true) => addClass(node, (typeof value === 'function') ? () => (value() === true ? 'grow' : `grow-${value()}`) : (value === true ? 'grow' : `grow-${value}`)));
+  addModifierMethod(node, 'shrink', (value = true) => addClass(node, (typeof value === 'function') ? () => (value() === true ? 'shrink' : `shrink-${value()}`) : (value === true ? 'shrink' : `shrink-${value}`)));
+  addModifierMethod(node, 'transitionClass', (value = 'colors') => addClass(node, (typeof value === 'function') ? () => `transition-${value() === 'colors' ? 'colors' : value()}` : `transition-${value === 'colors' ? 'colors' : value}`));
+  addModifierMethod(node, 'duration', (value) => addClass(node, (typeof value === 'function') ? () => `duration-${value()}` : `duration-${value}`));
+  addModifierMethod(node, 'ease', (value = 'out') => addClass(node, (typeof value === 'function')
+    ? () => (String(value()).startsWith('ease-') ? String(value()) : `ease-${value()}`)
+    : (String(value).startsWith('ease-') ? String(value) : `ease-${value}`)));
+  addModifierMethod(node, 'animate', (value = 'pulse') => addThemedProps(node, resolveAnimateClass(value)));
   addModifierMethod(node, 'absolute', () => addClass(node, 'absolute'));
   addModifierMethod(node, 'relative', () => addClass(node, 'relative'));
   addModifierMethod(node, 'fixed', () => addClass(node, 'fixed'));
@@ -970,11 +901,10 @@ function withModifiers(node) {
 
 export function mergeProps(...sources) {
   const nextProps = {};
-  const style = {};
-  const attrs = {};
-  const dataset = {};
+  const styleEntries = [];
+  const attrsEntries = [];
+  const datasetEntries = [];
   const classNames = [];
-  let hasReactiveClassName = false;
 
   sources
     .filter(Boolean)
@@ -983,35 +913,37 @@ export function mergeProps(...sources) {
         if (value === undefined) return;
 
         if (key === 'class' || key === 'className') {
+          warnReactiveValueOutsideFunction(value, 'Feather: className must wrap reactive values in a function (() => value).');
           classNames.push(value);
-          if (isBinding(value)) {
-            hasReactiveClassName = true;
-          }
           return;
         }
 
-        if (key === 'style' && isPlainObject(value)) {
-          Object.assign(style, value);
+        if (key === 'style') {
+          warnReactiveValueOutsideFunction(value, 'Feather: style must wrap reactive values in a function (() => value).');
+          styleEntries.push(value);
           return;
         }
 
-        if (key === 'attrs' && isPlainObject(value)) {
-          Object.assign(attrs, value);
+        if (key === 'attrs') {
+          warnReactiveValueOutsideFunction(value, 'Feather: attrs must wrap reactive values in a function (() => value).');
+          attrsEntries.push(value);
           return;
         }
 
-        if (key === 'dataset' && isPlainObject(value)) {
-          Object.assign(dataset, value);
+        if (key === 'dataset') {
+          warnReactiveValueOutsideFunction(value, 'Feather: dataset must wrap reactive values in a function (() => value).');
+          datasetEntries.push(value);
           return;
         }
 
+        warnReactiveValueOutsideFunction(value, `Feather: ${key} must be passed as a function (() => value).`);
         nextProps[key] = value;
       });
     });
 
   if (classNames.length > 0) {
-    if (hasReactiveClassName) {
-      nextProps.className = mapJoinedBinding(classNames, (values) => cx(values));
+    if (classNames.some((value) => typeof value === 'function')) {
+      nextProps.className = () => cx(classNames.map((value) => (typeof value === 'function' ? value() : value)));
     } else {
       const mergedClassName = cx(classNames);
       if (mergedClassName) {
@@ -1020,16 +952,31 @@ export function mergeProps(...sources) {
     }
   }
 
-  if (Object.keys(style).length > 0) {
-    nextProps.style = style;
+  if (styleEntries.length > 0) {
+    nextProps.style = styleEntries.some((value) => typeof value === 'function')
+      ? () => Object.assign({}, ...styleEntries.map((value) => {
+        const resolvedValue = typeof value === 'function' ? value() : value;
+        return resolvedValue && typeof resolvedValue === 'object' ? resolvedValue : {};
+      }))
+      : Object.assign({}, ...styleEntries.filter((value) => value && typeof value === 'object'));
   }
 
-  if (Object.keys(attrs).length > 0) {
-    nextProps.attrs = attrs;
+  if (attrsEntries.length > 0) {
+    nextProps.attrs = attrsEntries.some((value) => typeof value === 'function')
+      ? () => Object.assign({}, ...attrsEntries.map((value) => {
+        const resolvedValue = typeof value === 'function' ? value() : value;
+        return resolvedValue && typeof resolvedValue === 'object' ? resolvedValue : {};
+      }))
+      : Object.assign({}, ...attrsEntries.filter((value) => value && typeof value === 'object'));
   }
 
-  if (Object.keys(dataset).length > 0) {
-    nextProps.dataset = dataset;
+  if (datasetEntries.length > 0) {
+    nextProps.dataset = datasetEntries.some((value) => typeof value === 'function')
+      ? () => Object.assign({}, ...datasetEntries.map((value) => {
+        const resolvedValue = typeof value === 'function' ? value() : value;
+        return resolvedValue && typeof resolvedValue === 'object' ? resolvedValue : {};
+      }))
+      : Object.assign({}, ...datasetEntries.filter((value) => value && typeof value === 'object'));
   }
 
   delete nextProps.class;
@@ -1150,31 +1097,158 @@ function createReactiveRegion(getter, context) {
 }
 
 function createReactiveChildNode(binding, context) {
-  const bindingGetter = createBindingGetter(binding, DIRECT_REACTIVE_CHILD_WARNING);
-  return createReactiveRegion(() => (bindingGetter ? bindingGetter() : binding), context);
+  return createReactiveRegion(binding, context);
 }
 
 function applyStyles(element, styles) {
   if (!styles || typeof styles !== 'object') return;
 
+  warnReactiveValueOutsideFunction(styles, 'Feather: style must wrap reactive values in a function (() => value).');
+
   Object.entries(styles).forEach(([property, value]) => {
-    const nextValue = read(value);
-    if (nextValue === null || nextValue === undefined) return;
+    if (value === null || value === undefined || value === false) return;
     if (property.startsWith('--') || property.includes('-')) {
-      element.style.setProperty(property, String(nextValue));
+      element.style.setProperty(property, String(value));
       return;
     }
 
-    element.style[property] = String(nextValue);
+    element.style[property] = String(value);
   });
 }
 
 function applyClassName(element, value) {
+  if (isReactive(value)) {
+    warnBinding('Feather: className must wrap reactive values in a function (() => value).');
+    element.removeAttribute('class');
+    return;
+  }
+
+  warnReactiveValueOutsideFunction(value, 'Feather: className must wrap reactive values in a function (() => value).');
   const classNames = cx(value);
-  element.setAttribute('class', classNames);
+  if (classNames) {
+    element.setAttribute('class', classNames);
+    return;
+  }
+
+  element.removeAttribute('class');
+}
+
+function clearStyleProperty(element, property) {
+  if (property.startsWith('--') || property.includes('-')) {
+    element.style.removeProperty(property);
+    return;
+  }
+
+  element.style[property] = '';
+}
+
+function applyStyleObject(element, previousValue, nextValue) {
+  warnReactiveValueOutsideFunction(nextValue, 'Feather: style must wrap reactive values in a function (() => value).');
+  const previousEntries = previousValue && typeof previousValue === 'object' ? previousValue : {};
+  const nextEntries = nextValue && typeof nextValue === 'object' ? nextValue : {};
+  const keys = new Set([
+    ...Object.keys(previousEntries),
+    ...Object.keys(nextEntries),
+  ]);
+
+  keys.forEach((property) => {
+    const value = nextEntries[property];
+    if (value === null || value === undefined || value === false) {
+      clearStyleProperty(element, property);
+      return;
+    }
+
+    if (property.startsWith('--') || property.includes('-')) {
+      element.style.setProperty(property, String(value));
+      return;
+    }
+
+    element.style[property] = String(value);
+  });
+
+  if (Object.keys(nextEntries).length === 0 && !element.getAttribute('style')) {
+    element.removeAttribute('style');
+  }
+}
+
+function applyDatasetObject(element, previousValue, nextValue) {
+  warnReactiveValueOutsideFunction(nextValue, 'Feather: dataset must wrap reactive values in a function (() => value).');
+  const previousEntries = previousValue && typeof previousValue === 'object' ? previousValue : {};
+  const nextEntries = nextValue && typeof nextValue === 'object' ? nextValue : {};
+  const keys = new Set([
+    ...Object.keys(previousEntries),
+    ...Object.keys(nextEntries),
+  ]);
+
+  keys.forEach((key) => {
+    const value = nextEntries[key];
+    if (value === null || value === undefined || value === false) {
+      delete element.dataset[key];
+      return;
+    }
+
+    element.dataset[key] = String(value);
+  });
+}
+
+function applyAttributeObject(element, previousValue, nextValue) {
+  warnReactiveValueOutsideFunction(nextValue, 'Feather: attrs must wrap reactive values in a function (() => value).');
+  const previousEntries = previousValue && typeof previousValue === 'object' ? previousValue : {};
+  const nextEntries = nextValue && typeof nextValue === 'object' ? nextValue : {};
+  const keys = new Set([
+    ...Object.keys(previousEntries),
+    ...Object.keys(nextEntries),
+  ]);
+
+  keys.forEach((key) => {
+    const value = nextEntries[key];
+    if (value === true) {
+      element.setAttribute(key, '');
+      return;
+    }
+
+    if (value === null || value === undefined || value === false) {
+      element.removeAttribute(key);
+      return;
+    }
+
+    element.setAttribute(key, String(value));
+  });
+}
+
+function createPropApplicator(element, key, context) {
+  let previousValue;
+
+  return (nextValue) => {
+    if (key === 'style') {
+      applyStyleObject(element, previousValue, nextValue);
+      previousValue = nextValue && typeof nextValue === 'object' ? { ...nextValue } : null;
+      return null;
+    }
+
+    if (key === 'dataset') {
+      applyDatasetObject(element, previousValue, nextValue);
+      previousValue = nextValue && typeof nextValue === 'object' ? { ...nextValue } : null;
+      return null;
+    }
+
+    if (key === 'attrs') {
+      applyAttributeObject(element, previousValue, nextValue);
+      previousValue = nextValue && typeof nextValue === 'object' ? { ...nextValue } : null;
+      return null;
+    }
+
+    previousValue = nextValue;
+    return applyResolvedProp(element, key, nextValue, context);
+  };
 }
 
 function applyResolvedProp(element, key, nextValue, context) {
+  if (isReactive(nextValue)) {
+    warnBinding(`Feather: ${getBindingTargetName(key)} must be passed as a function (() => value).`);
+    nextValue = undefined;
+  }
+
   if (key === 'checked') {
     element.checked = Boolean(nextValue);
     return;
@@ -1251,12 +1325,12 @@ function applyResolvedProp(element, key, nextValue, context) {
 
   if (key === 'class' || key === 'className') {
     applyClassName(element, nextValue);
-    return;
+    return null;
   }
 
   if (key === 'style') {
     applyStyles(element, nextValue);
-    return;
+    return null;
   }
 
   if (key === 'dataset' && typeof nextValue === 'object') {
@@ -1265,14 +1339,14 @@ function applyResolvedProp(element, key, nextValue, context) {
         element.dataset[entryKey] = String(entryValue);
       }
     });
-    return;
+    return null;
   }
 
   if (key === 'routerLink') {
     if (nextValue) {
       element.setAttribute('data-link', '');
     }
-    return;
+    return null;
   }
 
   if (key === 'attrs' && typeof nextValue === 'object') {
@@ -1289,44 +1363,39 @@ function applyResolvedProp(element, key, nextValue, context) {
 
       element.setAttribute(entryKey, String(entryValue));
     });
-    return;
+    return null;
   }
 
   if (key === 'html') {
     element.innerHTML = String(nextValue);
-    return;
+    return null;
   }
 
   if (key === 'text') {
     element.textContent = String(nextValue);
-    return;
+    return null;
   }
 
   if (key === 'ref' && typeof nextValue === 'function') {
     nextValue(element, context);
-    return;
+    return null;
   }
 
   if (key.startsWith('on') && typeof nextValue === 'function') {
     const eventName = key.slice(2).toLowerCase();
     element.addEventListener(eventName, nextValue);
-
-    if (context?.cleanup) {
-      context.cleanup(() => element.removeEventListener(eventName, nextValue));
-    }
-
-    return;
+    return () => element.removeEventListener(eventName, nextValue);
   }
 
   if (key === 'value') {
     element.value = String(nextValue);
-    return;
+    return null;
   }
 
   if (key in element && typeof nextValue !== 'object') {
     try {
       element[key] = nextValue;
-      return;
+      return null;
     } catch {
       // Fall through to setAttribute.
     }
@@ -1334,58 +1403,87 @@ function applyResolvedProp(element, key, nextValue, context) {
 
   if (nextValue === true) {
     element.setAttribute(key, '');
-    return;
-  }
-
-  element.setAttribute(key, String(nextValue));
-}
-
-function createReactivePropBinding(key, value) {
-  const legacyMessage = `Feather: Pass reactive values to ${key} as functions. Use ${key}(() => value.get()) instead of passing the reactive value directly.`;
-  const bindingGetter = (key.startsWith('on') || key === 'ref')
-    ? null
-    : createBindingGetter(value, legacyMessage);
-
-  if (!bindingGetter) {
     return null;
   }
 
-  return {
-    key,
-    get: bindingGetter,
-  };
+  element.setAttribute(key, String(nextValue));
+  return null;
 }
 
-function applyReactivePropBinding(element, binding, context) {
-  applyResolvedProp(element, binding.key, binding.get(), context);
+function shouldApplyPropBinding(key, value) {
+  return typeof value === 'function' && !key.startsWith('on') && key !== 'ref';
 }
 
-function applyElementProps(element, props, context) {
-  // Bindings on the same node share one effect so prop-heavy elements scale better
-  // without changing the granularity of the actual prop updates.
-  const reactiveBindings = [];
+function createPropController(element, context) {
+  const entries = new Map();
+  let previousProps = {};
 
-  Object.entries(props).forEach(([key, value]) => {
-    const binding = createReactivePropBinding(key, value);
-    if (binding) {
-      reactiveBindings.push(binding);
-      return;
+  function getEntry(key) {
+    if (entries.has(key)) {
+      return entries.get(key);
     }
 
-    applyResolvedProp(element, key, value, context);
-  });
+    const entry = {
+      apply: createPropApplicator(element, key, context),
+      stop: null,
+    };
 
-  if (reactiveBindings.length === 0) {
-    return;
+    entries.set(key, entry);
+    return entry;
   }
 
-  const stop = effect(() => {
-    reactiveBindings.forEach((binding) => {
-      applyReactivePropBinding(element, binding, context);
-    });
-  });
+  function setProp(key, value) {
+    const entry = getEntry(key);
+    if (typeof entry.stop === 'function') {
+      entry.stop();
+      entry.stop = null;
+    }
 
-  context?.cleanup(stop);
+    const stop = shouldApplyPropBinding(key, value)
+      ? applyBinding(value, entry.apply)
+      : entry.apply(value);
+
+    entry.stop = typeof stop === 'function' ? stop : null;
+  }
+
+  function update(nextProps = {}) {
+    const keys = new Set([
+      ...Object.keys(previousProps),
+      ...Object.keys(nextProps),
+    ]);
+
+    keys.forEach((key) => {
+      if (!Object.prototype.hasOwnProperty.call(nextProps, key)) {
+        setProp(key, undefined);
+        return;
+      }
+
+      if (Object.is(previousProps[key], nextProps[key])) {
+        return;
+      }
+
+      setProp(key, nextProps[key]);
+    });
+
+    previousProps = { ...nextProps };
+  }
+
+  function destroy() {
+    entries.forEach(({ stop }) => {
+      if (typeof stop === 'function') {
+        stop();
+      }
+    });
+    entries.clear();
+    previousProps = {};
+  }
+
+  context?.cleanup(destroy);
+
+  return {
+    update,
+    destroy,
+  };
 }
 
 function createElementNode(node, context) {
@@ -1411,31 +1509,21 @@ function createElementNode(node, context) {
   const childContext = usesSvgNamespace && !inSvgTree
     ? { ...context, svgNamespace: true }
     : context;
-  applyElementProps(element, resolvedNode.nodeProps, childContext);
+  const propController = createPropController(element, childContext);
+  const hasRuntimeResolvers = Boolean(
+    node.meta?.prepareProps
+    || node.meta?.resolveClassName
+    || node.meta?.resolveProps,
+  );
 
-  if (isBinding(node.meta?.state)) {
-    let previousRuntimeProps = resolvedNode.nodeProps;
+  if (hasRuntimeResolvers) {
     const stop = effect(() => {
-      const runtimeNode = resolveRuntimeNode(node);
-      const nextRuntimeProps = runtimeNode.nodeProps;
-      const keys = new Set([
-        ...Object.keys(previousRuntimeProps || {}),
-        ...Object.keys(nextRuntimeProps || {}),
-      ]);
-
-      keys.forEach((key) => {
-        applyResolvedProp(
-          element,
-          key,
-          resolveBindingValue(Object.prototype.hasOwnProperty.call(nextRuntimeProps, key) ? nextRuntimeProps[key] : undefined),
-          childContext,
-        );
-      });
-
-      previousRuntimeProps = nextRuntimeProps;
+      propController.update(resolveRuntimeNode(node).nodeProps);
     });
 
     childContext?.cleanup(stop);
+  } else {
+    propController.update(resolvedNode.nodeProps);
   }
 
   if (!resolvedNode.nodeProps.html && !resolvedNode.nodeProps.text) {
@@ -1446,15 +1534,13 @@ function createElementNode(node, context) {
 }
 
 function resolveRuntimeNode(node) {
-  // Runtime state also flows through the binding pipeline so modifiers, props,
-  // and control-flow helpers share the same mental model.
-  const runtimeState = resolveBindingValue(node.meta?.state || {});
+  const runtimeState = node.meta?.state || {};
   const preparedProps = typeof node.meta?.prepareProps === 'function'
     ? node.meta.prepareProps(node.nodeProps, node.children)
     : node.nodeProps;
   const resolvedClassName = typeof node.meta?.resolveClassName === 'function'
-    ? node.meta.resolveClassName(runtimeState, node)
-    : '';
+    ? resolveThemeProps(node.meta.resolveClassName(runtimeState, node))
+    : null;
   const resolvedProps = typeof node.meta?.resolveProps === 'function'
     ? node.meta.resolveProps(runtimeState, node)
     : null;
@@ -1479,7 +1565,8 @@ export function createDomNode(value, context) {
   }
 
   if (isReactive(value)) {
-    return createReactiveChildNode(value, context);
+    warnBinding(DIRECT_REACTIVE_CHILD_WARNING);
+    return null;
   }
 
   if (typeof value === 'function') {
@@ -1850,10 +1937,11 @@ export function createPrimitive(tagName, options = {}) {
     const baseClassName = typeof options.className === 'function'
       ? options.className(nextProps, children)
       : options.className;
+    const baseThemeProps = styled && !unstyled ? resolveThemeProps(baseClassName) : null;
 
     return createNode(
       tagName,
-      mergeProps(nextProps, styled && !unstyled && baseClassName ? { className: baseClassName } : null),
+      mergeProps(nextProps, baseThemeProps),
       children,
       {
         kind: options.kind || tagName,
@@ -1883,10 +1971,11 @@ function createAlias(tagName, defaultClassName = '') {
   return function aliasComponent(...args) {
     const { props, children } = resolveComponentArgs(args);
     const { styled = false, unstyled = false, ...rest } = props;
+    const defaultThemeProps = styled && !unstyled ? resolveThemeProps(defaultClassName) : null;
 
     return createNode(
       tagName,
-      mergeProps(styled && !unstyled && defaultClassName ? { className: defaultClassName } : null, rest),
+      mergeProps(defaultThemeProps, rest),
       children,
     );
   };
@@ -1934,9 +2023,9 @@ function resolveLinkTo(node, value) {
 function resolveAriaLabel(node, value) {
   return cloneNode(node, {
     props: {
-      attrs: {
-        'aria-label': value,
-      },
+      attrs: typeof value === 'function'
+        ? () => ({ 'aria-label': value() })
+        : { 'aria-label': value },
     },
   });
 }
@@ -1944,9 +2033,9 @@ function resolveAriaLabel(node, value) {
 function resolveAriaLabelledBy(node, value) {
   return cloneNode(node, {
     props: {
-      attrs: {
-        'aria-labelledby': value,
-      },
+      attrs: typeof value === 'function'
+        ? () => ({ 'aria-labelledby': value() })
+        : { 'aria-labelledby': value },
     },
   });
 }
@@ -1954,9 +2043,9 @@ function resolveAriaLabelledBy(node, value) {
 function resolveAriaDescribedBy(node, value) {
   return cloneNode(node, {
     props: {
-      attrs: {
-        'aria-describedby': value,
-      },
+      attrs: typeof value === 'function'
+        ? () => ({ 'aria-describedby': value() })
+        : { 'aria-describedby': value },
     },
   });
 }
@@ -1964,9 +2053,12 @@ function resolveAriaDescribedBy(node, value) {
 function resolveLandmarkRole(node, value = 'region') {
   return cloneNode(node, {
     props: {
-      attrs: {
-        role: value === true ? 'region' : value,
-      },
+      attrs: typeof value === 'function'
+        ? () => {
+          const resolvedValue = value();
+          return { role: resolvedValue === true ? 'region' : resolvedValue };
+        }
+        : { role: value === true ? 'region' : value },
     },
   });
 }
@@ -1974,7 +2066,9 @@ function resolveLandmarkRole(node, value = 'region') {
 function resolveTextWrapBalance(node, value = true) {
   return cloneNode(node, {
     props: {
-      style: value ? { textWrap: 'balance' } : {},
+      style: typeof value === 'function'
+        ? () => (value() ? { textWrap: 'balance' } : {})
+        : (value ? { textWrap: 'balance' } : {}),
     },
   });
 }
@@ -1982,13 +2076,15 @@ function resolveTextWrapBalance(node, value = true) {
 function resolveTextWrapPretty(node, value = true) {
   return cloneNode(node, {
     props: {
-      style: value ? { textWrap: 'pretty' } : {},
+      style: typeof value === 'function'
+        ? () => (value() ? { textWrap: 'pretty' } : {})
+        : (value ? { textWrap: 'pretty' } : {}),
     },
   });
 }
 
 function resolveClamp(node, lines = 1) {
-  const count = Number(read(lines) ?? 1);
+  const count = Number((typeof lines === 'function' ? lines() : lines) ?? 1);
   if (count <= 1) {
     return cloneNode(node, {
       props: {
@@ -2016,15 +2112,15 @@ function resolveClamp(node, lines = 1) {
 function resolveFontWeight(node, value) {
   return cloneNode(node, {
     props: {
-      style: {
-        fontWeight: value,
-      },
+      style: typeof value === 'function'
+        ? () => ({ fontWeight: value() })
+        : { fontWeight: value },
     },
   });
 }
 
 function resolveHeadingLevel(node, value = 1) {
-  const level = Math.max(1, Math.min(6, Number(read(value) || 1)));
+  const level = Math.max(1, Math.min(6, Number((typeof value === 'function' ? value() : value) || 1)));
   return cloneNode(node, {
     nodeType: `h${level}`,
   });
@@ -2033,9 +2129,9 @@ function resolveHeadingLevel(node, value = 1) {
 function resolveListMarker(node, value) {
   return cloneNode(node, {
     props: {
-      style: {
-        listStyleType: value,
-      },
+      style: typeof value === 'function'
+        ? () => ({ listStyleType: value() })
+        : { listStyleType: value },
     },
   });
 }
@@ -2043,9 +2139,9 @@ function resolveListMarker(node, value) {
 function resolveListInside(node, value = true) {
   return cloneNode(node, {
     props: {
-      style: {
-        listStylePosition: value ? 'inside' : 'outside',
-      },
+      style: typeof value === 'function'
+        ? () => ({ listStylePosition: value() ? 'inside' : 'outside' })
+        : { listStylePosition: value ? 'inside' : 'outside' },
     },
   });
 }
@@ -2053,9 +2149,9 @@ function resolveListInside(node, value = true) {
 function resolveListOutside(node, value = true) {
   return cloneNode(node, {
     props: {
-      style: {
-        listStylePosition: value ? 'outside' : 'inside',
-      },
+      style: typeof value === 'function'
+        ? () => ({ listStylePosition: value() ? 'outside' : 'inside' })
+        : { listStylePosition: value ? 'outside' : 'inside' },
     },
   });
 }
@@ -2063,10 +2159,9 @@ function resolveListOutside(node, value = true) {
 function resolveListGap(node, value) {
   return cloneNode(node, {
     props: {
-      style: {
-        display: 'grid',
-        gap: value,
-      },
+      style: typeof value === 'function'
+        ? () => ({ display: 'grid', gap: value() })
+        : { display: 'grid', gap: value },
     },
   });
 }
@@ -2074,7 +2169,9 @@ function resolveListGap(node, value) {
 function resolveListDense(node, value = true) {
   return cloneNode(node, {
     props: {
-      style: value ? { gap: '.25rem' } : {},
+      style: typeof value === 'function'
+        ? () => (value() ? { gap: '.25rem' } : {})
+        : (value ? { gap: '.25rem' } : {}),
     },
   });
 }
@@ -2109,7 +2206,7 @@ export function Text(...args) {
 
   return createNode(
     'span',
-    mergeProps(styled && !unstyled ? { className: token('text.base') } : null, rest),
+    mergeProps(styled && !unstyled ? resolveThemeProps(token('text.base')) : null, rest),
     children,
   );
 }
@@ -2142,6 +2239,8 @@ function createLandmarkElement(tagName, defaultClassName = '', modifiers = {}) {
 export const Container = createAlias('div', 'feather-container');
 export const Box = createAlias('div', 'feather-box');
 export const Break = createAlias('br');
+export const LineBreak = Break;
+export const Divider = createAlias('hr');
 export const Group = createAlias('div', 'feather-group');
 export const Span = createTextElement('span');
 export const Paragraph = createTextElement('p');
@@ -2222,7 +2321,11 @@ export function VStack(...args) {
     },
   });
 
-  return createNode('div', props, children);
+  return createNode(
+    'div',
+    mergeProps({ className: 'feather-vstack' }, props),
+    children,
+  );
 }
 
 export function HStack(...args) {
@@ -2234,7 +2337,11 @@ export function HStack(...args) {
     },
   });
 
-  return createNode('div', props, children);
+  return createNode(
+    'div',
+    mergeProps({ className: 'feather-hstack' }, props),
+    children,
+  );
 }
 
 export function ZStack(...args) {
@@ -2260,7 +2367,11 @@ export function ZStack(...args) {
     });
   });
 
-  return createNode('div', props, layeredChildren);
+  return createNode(
+    'div',
+    mergeProps({ className: 'feather-zstack' }, props),
+    layeredChildren,
+  );
 }
 
 export function Spacer(props = {}) {
@@ -2281,22 +2392,24 @@ export const Button = createPrimitive('button', {
     block: false,
     loading: false,
   },
-  resolveClassName: (state, node) => !node.meta?.styled ? '' : cx(
-    token('button.base'),
-    token(`button.variant.${read(state.variant) || 'primary'}`),
-    token(`button.size.${read(state.size) || 'md'}`),
-    read(state.block) && token('button.block'),
-    read(state.loading) && token('button.loading'),
+  resolveProps: (state, node) => mergeProps(
+    node.meta?.styled ? resolveThemeProps(
+      token('button.base'),
+      token(`button.variant.${read(state.variant) || 'primary'}`),
+      token(`button.size.${read(state.size) || 'md'}`),
+      read(state.block) && token('button.block'),
+      read(state.loading) && token('button.loading'),
+    ) : null,
+    read(state.loading) ? {
+      disabled: true,
+      attrs: {
+        'aria-busy': 'true',
+      },
+      dataset: {
+        loading: 'true',
+      },
+    } : null,
   ),
-  resolveProps: (state) => (read(state.loading) ? {
-    disabled: true,
-    attrs: {
-      'aria-busy': 'true',
-    },
-    dataset: {
-      loading: 'true',
-    },
-  } : null),
   modifiers: {
     variant: resolveButtonVariant,
     size: resolveButtonSize,
@@ -2307,8 +2420,8 @@ export const Button = createPrimitive('button', {
 
 export const Input = createPrimitive('input', {
   kind: 'input',
-  prepareProps: (props) => resolveModelBindings(props),
-  resolveClassName: (_state, node) => !node.meta?.styled ? '' : token('input.base'),
+  prepareProps: (props) => resolveFieldBindings(props),
+  resolveClassName: (_state, node) => (!node.meta?.styled ? null : token('input.base')),
 });
 
 export const Img = createPrimitive('img', {
@@ -2324,48 +2437,48 @@ export const Checkbox = createPrimitive('input', {
   defaults: {
     type: 'checkbox',
   },
-  prepareProps: (props) => resolveModelBindings(props),
+  prepareProps: (props) => resolveFieldBindings(props),
   resolveClassName: (_state, node) => !node.meta?.styled ? '' : '',
 });
 
 export const Link = createPrimitive('a', {
   kind: 'link',
-  resolveClassName: (_state, node) => !node.meta?.styled ? '' : token('link.base'),
+  resolveClassName: (_state, node) => (!node.meta?.styled ? null : token('link.base')),
   modifiers: {
     to: resolveLinkTo,
   },
 });
 
 export function ForEach(items, renderItem) {
-  const itemsGetter = createBindingGetter(
-    items,
-    'Feather: Pass reactive ForEach sources as functions. Use ForEach(() => items.get(), renderItem).',
-  );
-
-  if (itemsGetter) {
+  if (typeof items === 'function') {
     return () => {
-      const resolvedItems = read(itemsGetter());
+      const resolvedItems = items();
       if (!Array.isArray(resolvedItems)) return [];
       return resolvedItems.map((item, index) => renderItem(item, index));
     };
   }
 
-  const resolvedItems = read(items);
+  if (isReactive(items)) {
+    warnBinding('Feather: Pass reactive ForEach sources as functions. Use ForEach(() => items.get(), renderItem).');
+    return [];
+  }
+
+  const resolvedItems = items;
   if (!Array.isArray(resolvedItems)) return [];
   return resolvedItems.map((item, index) => renderItem(item, index));
 }
 
 export function Show(condition, truthyValue, falsyValue = null) {
-  const conditionGetter = createBindingGetter(
-    condition,
-    'Feather: Pass reactive Show conditions as functions. Use Show(() => open.get(), shown, hidden).',
-  );
-
-  if (conditionGetter) {
-    return () => (read(conditionGetter()) ? truthyValue : falsyValue);
+  if (typeof condition === 'function') {
+    return () => (condition() ? truthyValue : falsyValue);
   }
 
-  return read(condition) ? truthyValue : falsyValue;
+  if (isReactive(condition)) {
+    warnBinding('Feather: Pass reactive Show conditions as functions. Use Show(() => open.get(), shown, hidden).');
+    return falsyValue;
+  }
+
+  return condition ? truthyValue : falsyValue;
 }
 
 export function Alert(...args) {
@@ -2381,10 +2494,10 @@ export function Alert(...args) {
     modifiers: {
       variant: resolveAlertVariant,
     },
-    resolveClassName: (state) => !state.styled ? '' : cx(
+    resolveProps: (state) => (!state.styled ? null : resolveThemeProps(
       token('surface.alert'),
       token(`alert.variant.${read(state.variant) || 'info'}`),
-    ),
+    )),
   });
 }
 

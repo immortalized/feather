@@ -1,23 +1,30 @@
-import { isReactive, read } from './state.js';
-
 function isObject(value) {
   return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
 }
 
+function isThemeReference(value) {
+  return (typeof value === 'string' && value.startsWith('$'))
+    || (isObject(value) && typeof value.$token === 'string');
+}
+
+function isThemePropsObject(value) {
+  return isObject(value) && ('className' in value || 'style' in value);
+}
+
 function normalizeClassValue(value) {
   if (!value) return [];
-
-  if (isReactive(value)) {
-    return normalizeClassValue(read(value));
-  }
 
   if (Array.isArray(value)) {
     return value.flatMap(normalizeClassValue);
   }
 
   if (isObject(value)) {
+    if (isThemePropsObject(value)) {
+      return normalizeClassValue(value.className);
+    }
+
     return Object.entries(value)
-      .filter(([, enabled]) => Boolean(read(enabled)))
+      .filter(([, enabled]) => typeof enabled !== 'function' && typeof enabled !== 'object' && Boolean(enabled))
       .map(([className]) => className);
   }
 
@@ -63,6 +70,92 @@ function resolveVariantEntry(entry, value, options) {
   }
 
   return resolveVariantEntry(resolved, value, options);
+}
+
+function createThemeCycleMessage(path) {
+  return `Feather: Circular theme token reference detected while resolving "${path}".`;
+}
+
+function resolveThemeReference(value, stack) {
+  const path = typeof value === 'string' ? value.slice(1) : value.$token;
+  if (!path) {
+    return undefined;
+  }
+
+  if (stack.includes(path)) {
+    throw new Error(createThemeCycleMessage(path));
+  }
+
+  return resolveThemeValue(getPathValue(activeTheme, path), [...stack, path]);
+}
+
+function resolveThemeValue(value, stack = []) {
+  if (isThemeReference(value)) {
+    return resolveThemeReference(value, stack);
+  }
+
+  if (Array.isArray(value)) {
+    return value.map((entry) => resolveThemeValue(entry, stack));
+  }
+
+  if (!isObject(value)) {
+    return value;
+  }
+
+  if (isThemePropsObject(value)) {
+    const resolved = {};
+    const className = resolveThemeValue(value.className, stack);
+    const style = resolveThemeValue(value.style, stack);
+
+    if (className) {
+      resolved.className = cx(className);
+    }
+
+    if (isObject(style) && Object.keys(style).length > 0) {
+      resolved.style = style;
+    }
+
+    return resolved;
+  }
+
+  return Object.fromEntries(
+    Object.entries(value).map(([key, entryValue]) => [key, resolveThemeValue(entryValue, stack)]),
+  );
+}
+
+function normalizeThemePropsEntry(entry) {
+  const resolvedEntry = resolveThemeValue(entry);
+  if (!resolvedEntry) {
+    return null;
+  }
+
+  if (typeof resolvedEntry === 'string' || Array.isArray(resolvedEntry)) {
+    const className = cx(resolvedEntry);
+    return className ? { className } : null;
+  }
+
+  if (!isObject(resolvedEntry)) {
+    return null;
+  }
+
+  if (isThemePropsObject(resolvedEntry)) {
+    const nextProps = {};
+
+    if (resolvedEntry.className) {
+      const className = cx(resolvedEntry.className);
+      if (className) {
+        nextProps.className = className;
+      }
+    }
+
+    if (isObject(resolvedEntry.style) && Object.keys(resolvedEntry.style).length > 0) {
+      nextProps.style = resolvedEntry.style;
+    }
+
+    return Object.keys(nextProps).length > 0 ? nextProps : null;
+  }
+
+  return Object.keys(resolvedEntry).length > 0 ? { style: resolvedEntry } : null;
 }
 
 const DEFAULT_THEME = {
@@ -155,11 +248,53 @@ export function getTheme() {
 }
 
 export function token(path, fallback = '') {
-  return cx(getPathValue(activeTheme, path) ?? fallback);
+  const value = getPathValue(activeTheme, path);
+  return resolveThemeValue(value === undefined ? fallback : value, [String(path)]);
 }
 
 export function resolveToken(group, value, fallback = '') {
   return token(`${group}.${value}`, fallback);
+}
+
+export function resolveThemeProps(...entries) {
+  const classNames = [];
+  const styles = [];
+
+  entries
+    .filter((entry) => entry !== null && entry !== undefined && entry !== false)
+    .forEach((entry) => {
+      const resolvedEntry = normalizeThemePropsEntry(entry);
+      if (!resolvedEntry) {
+        return;
+      }
+
+      if (resolvedEntry.className) {
+        classNames.push(resolvedEntry.className);
+      }
+
+      if (resolvedEntry.style) {
+        styles.push(resolvedEntry.style);
+      }
+    });
+
+  if (classNames.length === 0 && styles.length === 0) {
+    return null;
+  }
+
+  const nextProps = {};
+
+  if (classNames.length > 0) {
+    const className = cx(classNames);
+    if (className) {
+      nextProps.className = className;
+    }
+  }
+
+  if (styles.length > 0) {
+    nextProps.style = Object.assign({}, ...styles);
+  }
+
+  return Object.keys(nextProps).length > 0 ? nextProps : null;
 }
 
 export function defineVariants({
