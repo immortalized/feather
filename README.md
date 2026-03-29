@@ -2,12 +2,6 @@
 
 Feather is a runtime-first UI engine for building explicit interfaces with fine-grained reactivity, fluent DOM modifiers, and no template layer.
 
-## Version
-
-| Tag | Status | Style |
-| --- | --- | --- |
-| `v0.0.0` | active local framework build | runtime-first, fluent, explicit |
-
 ## What Feather Is
 
 Feather keeps the view layer small and readable:
@@ -213,73 +207,6 @@ Link('Settings')
   .href('/settings')
   .routerLink();
 ```
-
-## Real App Flow
-
-This repository already uses Feather end-to-end.
-
-### 1. App Bootstrap
-
-In [`src/js/main.js`](/c:/Users/User/Documents/GitHub/Project-Bloodwave-Web/src/js/main.js), the app:
-
-- imports page modules
-- defines the route list
-- creates the app router
-- exposes `window.router`
-- starts routing
-
-```js
-const router = Router(routes);
-window.router = router;
-router.start();
-```
-
-### 2. App Router Layer
-
-In [`src/js/router.js`](/c:/Users/User/Documents/GitHub/Project-Bloodwave-Web/src/js/router.js), the app wraps Feather's router with project-specific behavior:
-
-- auth redirects
-- starfield toggling
-- footer injection
-- route-level post-render work
-
-That keeps the framework router small while the app owns its own policies.
-
-### 3. Page Setup
-
-In pages like [`src/js/pages/Login.js`](/c:/Users/User/Documents/GitHub/Project-Bloodwave-Web/src/js/pages/Login.js), `setup()` creates:
-
-- local signals
-- computed values
-- form state
-- grouped context objects
-
-### 4. Reactive Render
-
-`render(ctx)` returns a view tree using primitives such as `Box`, `Input`, `Paragraph`, `Button`, and `Link`.
-
-Live values are passed as functions:
-
-```js
-Paragraph().text(() => ctx.submit.error.get())
-SubmitButton(...).className(() => ({ success: ctx.submit.success.get() }))
-```
-
-### 5. Async And Navigation
-
-After login succeeds, the page does not need a separate router hook system. It just navigates:
-
-```js
-ctx.timeout(() => window.router.navigate('/main'), 700, 'lifetime');
-```
-
-That is the typical Feather loop in this app:
-
-1. Router selects a page.
-2. `setup()` creates state.
-3. `render()` returns the DOM tree.
-4. Function bindings keep the UI live.
-5. Events and async work update signals or navigate directly.
 
 ## Start Here
 
