@@ -726,7 +726,7 @@ function HeroSection(ctx) {
     Box().className('sc-orb sc-orb-1'),
     Box().className('sc-orb sc-orb-2'),
     Box(
-      Paragraph('Runtime-first UI engine · v0.0.0').className('sc-hero-eyebrow'),
+      Paragraph('Runtime-first UI engine · v2.0.0').className('sc-hero-eyebrow'),
       Title(
         'Build',
         LineBreak(),
