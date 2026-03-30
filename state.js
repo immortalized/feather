@@ -84,13 +84,28 @@ function createSource() {
   };
 }
 
-function createReactiveHandle(kind, api) {
-  return {
-    ...api,
-    [FEATHER_REACTIVE]: true,
-    __featherReactive: true,
-    kind,
-  };
+function createReactiveHandle(kind, api, invoke) {
+  const handle = typeof invoke === 'function'
+    ? function featherReactiveHandle(...args) {
+      return invoke(...args);
+    }
+    : {};
+
+  Object.defineProperties(handle, {
+    ...Object.getOwnPropertyDescriptors(api),
+    [FEATHER_REACTIVE]: {
+      value: true,
+    },
+    __featherReactive: {
+      value: true,
+    },
+    kind: {
+      value: kind,
+      enumerable: true,
+    },
+  });
+
+  return handle;
 }
 
 function createObserver(run, options = {}) {
@@ -148,7 +163,15 @@ export function isReactive(value) {
 }
 
 export function read(value) {
-  return isReactive(value) ? value.get() : value;
+  if (!isReactive(value)) {
+    return value;
+  }
+
+  if (typeof value === 'function') {
+    return value();
+  }
+
+  return value.get();
 }
 
 export function batch(fn) {
@@ -204,6 +227,8 @@ export function signal(initialValue) {
     return value;
   };
 
+  const updateValue = (updater) => writeValue(updater(value));
+
   return createReactiveHandle('signal', {
     get value() {
       return readValue();
@@ -221,12 +246,21 @@ export function signal(initialValue) {
       return writeValue(nextValue);
     },
     update(updater) {
-      return writeValue(updater(value));
+      return updateValue(updater);
     },
     subscribe(listener) {
       source.listeners.add(listener);
       return () => source.listeners.delete(listener);
     },
+  }, (...args) => {
+    if (args.length === 0) {
+      return readValue();
+    }
+
+    const [nextValue] = args;
+    return typeof nextValue === 'function'
+      ? updateValue(nextValue)
+      : writeValue(nextValue);
   });
 }
 
@@ -277,6 +311,12 @@ export function computed(getter) {
       source.listeners.add(listener);
       return () => source.listeners.delete(listener);
     },
+  }, (...args) => {
+    if (args.length > 0) {
+      throw new Error('Feather: computed values are read-only. Call computed() with no arguments to read the current value.');
+    }
+
+    return readValue();
   });
 }
 
@@ -313,22 +353,22 @@ export function store(initialState = {}) {
       return state.value;
     },
     get() {
-      return state.get();
+      return state();
     },
     peek() {
       return state.peek();
     },
     set(nextState) {
-      return state.set({ ...nextState });
+      return state({ ...nextState });
     },
     patch(partialState) {
-      return state.update((currentState) => ({
+      return state((currentState) => ({
         ...currentState,
         ...partialState,
       }));
     },
     update(updater) {
-      return state.update((currentState) => ({
+      return state((currentState) => ({
         ...currentState,
         ...updater(currentState),
       }));

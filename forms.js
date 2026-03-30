@@ -117,9 +117,9 @@ export function createForm({
 
   const fieldNames = Object.keys(initialValues);
 
-  const valid = computed(() => Object.values(errors.get()).every((value) => !value));
-  const invalid = computed(() => !valid.get());
-  const dirty = computed(() => fieldNames.some((name) => values.get()[name] !== initialValues[name]));
+  const valid = computed(() => Object.values(errors()).every((value) => !value));
+  const invalid = computed(() => !valid());
+  const dirty = computed(() => fieldNames.some((name) => values()[name] !== initialValues[name]));
 
   function patchValue(name, nextValue) {
     values.patch({ [name]: nextValue });
@@ -164,10 +164,10 @@ export function createForm({
 
     // Field accessors stay reactive so form.field(...).value integrates cleanly
     // with the same function-based binding model as the rest of Feather.
-    nextField.value = computed(() => values.get()[name]);
-    nextField.error = computed(() => errors.get()[name] || '');
-    nextField.touched = computed(() => Boolean(touched.get()[name]));
-    nextField.invalid = computed(() => Boolean(nextField.error.get()));
+    nextField.value = computed(() => values()[name]);
+    nextField.error = computed(() => errors()[name] || '');
+    nextField.touched = computed(() => Boolean(touched()[name]));
+    nextField.invalid = computed(() => Boolean(nextField.error()));
 
     fieldCache.set(name, nextField);
     return nextField;
@@ -175,9 +175,9 @@ export function createForm({
 
   function validateForm() {
     const nextErrors = normalizeErrors(
-      typeof validate === 'function' ? validate(values.get(), form) : {},
+      typeof validate === 'function' ? validate(values(), form) : {},
     );
-    const currentValues = values.get();
+    const currentValues = values();
 
     normalizedAccepts.forEach(({ name, message }) => {
       if (!currentValues[name] && !nextErrors[name]) {
@@ -192,7 +192,7 @@ export function createForm({
   async function submitForm(event) {
     event?.preventDefault?.();
 
-    if (submitting.get()) {
+    if (submitting()) {
       return false;
     }
 
@@ -207,7 +207,7 @@ export function createForm({
 
     try {
       if (typeof submit === 'function') {
-        await submit(values.get(), form, event);
+        await submit(values(), form, event);
       }
 
       return true;
@@ -254,7 +254,7 @@ export function createForm({
     },
     touch(nextTouched = true) {
       touched.set(normalizeTouched(nextTouched, fieldNames));
-      return touched.get();
+      return touched();
     },
   };
 
@@ -310,8 +310,8 @@ export function FieldError(field, fallback = null) {
   }
 
   return Paragraph()
-    .text(() => resolvedField.error.get() || fallbackContent || '')
-    .showWhen(alwaysRender ? true : () => Boolean(resolvedField.error.get()))
+    .text(() => resolvedField.error() || fallbackContent || '')
+    .showWhen(alwaysRender ? true : () => Boolean(resolvedField.error()))
     .className(cx('feather-field-error', className));
 }
 
@@ -380,9 +380,9 @@ export function TextField({
   const modelValue = typeof model === 'function'
     ? model
     : (typeof model?.get === 'function' ? () => model.get() : undefined);
-  const modelInput = typeof model?.set === 'function'
-    ? (event) => model.set(event.target.value)
-    : null;
+  const modelInput = typeof model === 'function'
+    ? (event) => model(event.target.value)
+    : (typeof model?.set === 'function' ? (event) => model.set(event.target.value) : null);
 
   return Field(
     label ? FieldLabel(label)

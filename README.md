@@ -1,12 +1,8 @@
 # Feather
 
+[![Version](https://img.shields.io/badge/version-v0.0.0-0f172a?style=for-the-badge)](https://github.com/immortalized/feather/releases)
+
 Feather is a runtime-first UI engine for building explicit interfaces with fine-grained reactivity, fluent DOM modifiers, and no template layer.
-
-## Version
-
-| Tag | Status | Style |
-| --- | --- | --- |
-| `v0.0.0` | active local framework build | runtime-first, fluent, explicit |
 
 ## What Feather Is
 
@@ -22,32 +18,40 @@ Feather uses plain JavaScript functions, reactive primitives, and chained modifi
 
 ```js
 Box(
-  Title('Bloodwave'),
+  Title('Feather'),
   Paragraph('Runtime-first UI.'),
 ).padding(24).background('#111').color('#fff');
 ```
 
 ## Core Rule
 
-Reactive values are only reactive when passed as functions.
+Functions define reactivity.
 
 Correct:
 
 ```js
-Text(() => count.get())
-Paragraph().text(() => user.name.get())
-Box().className(() => ({ active: open.get() }))
+Text(() => count())
+Paragraph().text(() => user.name())
+Box().className(() => ({ active: open() }))
 ```
 
 Incorrect:
 
 ```js
-Text(count.get())
-Text(count)
+Text(count())
+Text(ready ? 'yes' : 'no')
 Box().className({ active: count })
 ```
 
-If something should update, wrap the whole binding in a function.
+Signals are callable, but bindings should still read them inside a function so reactivity stays explicit.
+
+```js
+const count = signal(8);
+
+count(); // 8
+count(10); // set
+count((value) => value * 2); // update
+```
 
 ## Quick Start
 
@@ -66,9 +70,9 @@ const count = signal(0);
 mount(
   VStack(
     Title('Counter'),
-    Paragraph().text(() => `Count: ${count.get()}`),
+    Paragraph().text(() => `Count: ${count()}`),
     Button('Increment')
-      .onClick(() => count.update((value) => value + 1)),
+      .onClick(() => count((value) => value + 1)),
   )
     .gap(12)
     .padding(24),
@@ -87,10 +91,10 @@ import { Button, Paragraph, VStack, signal } from '../feather/index.js';
 const open = signal(false);
 
 VStack(
-  Button(() => (open.get() ? 'Hide' : 'Show'))
-    .onClick(() => open.update((value) => !value)),
+  Button(() => (open() ? 'Hide' : 'Show'))
+    .onClick(() => open((value) => !value)),
   Paragraph('Now visible')
-    .showWhen(() => open.get()),
+    .showWhen(() => open()),
 );
 ```
 
@@ -99,11 +103,11 @@ VStack(
 ```js
 import { Paragraph, computed, signal } from '../feather/index.js';
 
-const first = signal('Project');
-const second = signal('Bloodwave');
-const full = computed(() => `${first.get()} ${second.get()}`);
+const first = signal('Runtime');
+const second = signal('Feather');
+const full = computed(() => `${first()} ${second()}`);
 
-Paragraph().text(() => full.get());
+Paragraph().text(() => full());
 ```
 
 ### Reactive Objects
@@ -113,12 +117,12 @@ Objects are not reactive by themselves. The function boundary is the reactive pa
 ```js
 Box()
   .style(() => ({
-    opacity: loading.get() ? 0.5 : 1,
-    pointerEvents: loading.get() ? 'none' : 'auto',
+    opacity: loading() ? 0.5 : 1,
+    pointerEvents: loading() ? 'none' : 'auto',
   }))
   .className(() => ({
-    loading: loading.get(),
-    ready: !loading.get(),
+    loading: loading(),
+    ready: !loading(),
   }));
 ```
 
@@ -131,8 +135,8 @@ const items = signal(['Sword', 'Orb', 'Rune']);
 const ready = signal(true);
 
 Show(
-  () => ready.get(),
-  ForEach(() => items.get(), (item) => Text(item)),
+  () => ready(),
+  ForEach(() => items(), (item) => Text(item)),
   Text('Loading...'),
 );
 ```
@@ -170,10 +174,10 @@ export default page({
   render(ctx) {
     return Box(
       Title('Settings'),
-      Button(() => (ctx.open.get() ? 'Hide details' : 'Show details'))
-        .onClick(() => ctx.open.update((value) => !value)),
+      Button(() => (ctx.open() ? 'Hide details' : 'Show details'))
+        .onClick(() => ctx.open((value) => !value)),
       Paragraph('These details stay live because the binding is a function.')
-        .showWhen(() => ctx.open.get()),
+        .showWhen(() => ctx.open()),
     ).padding(24);
   },
 });
@@ -216,38 +220,40 @@ Link('Settings')
 
 ## Real App Flow
 
-This repository already uses Feather end-to-end.
+Here is a typical Feather app flow for something like a small admin dashboard.
 
 ### 1. App Bootstrap
 
-In [`src/js/main.js`](/c:/Users/User/Documents/GitHub/Project-Bloodwave-Web/src/js/main.js), the app:
+The entry file mounts the router and exposes navigation where needed:
 
 - imports page modules
 - defines the route list
-- creates the app router
-- exposes `window.router`
+- creates the router
 - starts routing
 
 ```js
-const router = Router(routes);
-window.router = router;
+const router = createRouter({
+  root: '#app',
+  routes,
+});
+
 router.start();
 ```
 
 ### 2. App Router Layer
 
-In [`src/js/router.js`](/c:/Users/User/Documents/GitHub/Project-Bloodwave-Web/src/js/router.js), the app wraps Feather's router with project-specific behavior:
+Route definitions stay plain and app-owned:
 
-- auth redirects
-- starfield toggling
-- footer injection
-- route-level post-render work
+- top-level layout selection
+- auth guards
+- not-found fallback
+- route-specific data loading hooks if the app wants them
 
-That keeps the framework router small while the app owns its own policies.
+That keeps Feather small while the app owns its own navigation policy.
 
 ### 3. Page Setup
 
-In pages like [`src/js/pages/Login.js`](/c:/Users/User/Documents/GitHub/Project-Bloodwave-Web/src/js/pages/Login.js), `setup()` creates:
+Each page builds its long-lived state in `setup()`:
 
 - local signals
 - computed values
@@ -258,22 +264,25 @@ In pages like [`src/js/pages/Login.js`](/c:/Users/User/Documents/GitHub/Project-
 
 `render(ctx)` returns a view tree using primitives such as `Box`, `Input`, `Paragraph`, `Button`, and `Link`.
 
-Live values are passed as functions:
+Live values stay explicit:
 
 ```js
-Paragraph().text(() => ctx.submit.error.get())
-SubmitButton(...).className(() => ({ success: ctx.submit.success.get() }))
+Paragraph().text(() => ctx.filters.query())
+Button(() => (ctx.panelOpen() ? 'Hide filters' : 'Show filters'))
 ```
 
 ### 5. Async And Navigation
 
-After login succeeds, the page does not need a separate router hook system. It just navigates:
+After an async action succeeds, the page can update signals and navigate directly:
 
 ```js
-ctx.timeout(() => window.router.navigate('/main'), 700, 'lifetime');
+ctx.saving(true);
+await saveSettings(ctx.form.values());
+ctx.saving(false);
+window.router.navigate('/settings/saved');
 ```
 
-That is the typical Feather loop in this app:
+That is the typical Feather loop:
 
 1. Router selects a page.
 2. `setup()` creates state.

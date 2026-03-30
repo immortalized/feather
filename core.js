@@ -7,7 +7,7 @@ const FEATHER_RUNTIME_STYLE_ID = 'feather-runtime-styles';
 const SVG_NAMESPACE = 'http://www.w3.org/2000/svg';
 const bindingWarnings = new Set();
 const DIRECT_REACTIVE_VALUE_WARNING = 'Feather: Reactive values must be wrapped in a function (() => value).';
-const DIRECT_REACTIVE_CHILD_WARNING = 'Feather: Pass reactive children as functions. Use Box(() => count.get()) instead of passing the reactive value directly.';
+const DIRECT_REACTIVE_CHILD_WARNING = 'Feather: Pass reactive children as functions. Use Box(count) or Box(() => count() + 1) instead of reading reactive values eagerly.';
 const SVG_TAGS = new Set([
   'svg',
   'path',
@@ -216,13 +216,13 @@ function resolveFieldBindings(props = {}) {
   const nextType = type === undefined ? currentType : type;
   const isCheckboxLike = currentType === 'checkbox' || currentType === 'radio';
   const invalidAttrs = field?.invalid
-    ? () => ({ 'aria-invalid': field.invalid.get() })
+    ? () => ({ 'aria-invalid': field.invalid() })
     : null;
 
   if (isCheckboxLike) {
     return mergeProps(rest, {
       type: nextType,
-      checked: () => field.value.get(),
+      checked: field.value,
       onChange: composeHandlers((event) => {
         field.set(Boolean(event.target.checked));
 
@@ -234,7 +234,7 @@ function resolveFieldBindings(props = {}) {
 
   return mergeProps(rest, {
     type: nextType,
-    value: () => field.value.get(),
+    value: field.value,
     onInput: composeHandlers((event) => {
       field.set(event.target.value);
       field.touch?.();
@@ -735,7 +735,6 @@ function withModifiers(node) {
   addModifierMethod(node, 'toggleClass', (name, condition = true) => addClass(node, typeof condition === 'function'
     ? () => ({ [name]: condition() })
     : { [name]: condition }));
-  addModifierMethod(node, 'tw', (...values) => addClass(node, values.filter(Boolean).join(' ')));
   addModifierMethod(node, 'style', (value) => addStyles(node, value));
   addModifierMethod(node, 'padding', (...args) => addStyleEntries(node, resolveBoxModelStyles('padding', args)));
   addModifierMethod(node, 'paddingRight', (value) => addStyleEntries(node, typeof value === 'function' ? () => ({ paddingRight: value() }) : { paddingRight: value }));
@@ -2459,7 +2458,7 @@ export function ForEach(items, renderItem) {
   }
 
   if (isReactive(items)) {
-    warnBinding('Feather: Pass reactive ForEach sources as functions. Use ForEach(() => items.get(), renderItem).');
+    warnBinding('Feather: Pass reactive ForEach sources as functions. Use ForEach(itemsSignal, renderItem) or ForEach(() => itemsStore().rows, renderItem).');
     return [];
   }
 
@@ -2474,7 +2473,7 @@ export function Show(condition, truthyValue, falsyValue = null) {
   }
 
   if (isReactive(condition)) {
-    warnBinding('Feather: Pass reactive Show conditions as functions. Use Show(() => open.get(), shown, hidden).');
+    warnBinding('Feather: Pass reactive Show conditions as functions. Use Show(openSignal, shown, hidden) or Show(() => store().open, shown, hidden).');
     return falsyValue;
   }
 

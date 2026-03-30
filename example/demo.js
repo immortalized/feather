@@ -717,6 +717,10 @@ function scrollToSection(id) {
   });
 }
 
+function scrollToTop() {
+  scrollToSection('sc-top');
+}
+
 // ─────────────────────────────────────────────
 // SECTION COMPONENTS
 // ─────────────────────────────────────────────
@@ -748,18 +752,18 @@ function HeroSection(ctx) {
       Box(
         VStack(
           Span('live signal value').className('sc-counter-label'),
-          Span(() => String(ctx.hero.count.get()))
-            .className(() => `sc-counter-display${ctx.hero.bump.get() ? ' bump' : ''}`),
+          Span(() => String(ctx.hero.count()))
+            .className(() => `sc-counter-display${ctx.hero.bump() ? ' bump' : ''}`),
           HStack(
             Button('+ increment').className('sc-btn sc-btn-accent sc-btn-sm')
-              .onClick(() => ctx.hero.count.update(v => v + 1)),
+              .onClick(() => ctx.hero.count(v => v + 1)),
             Button('- decrement').className('sc-btn sc-btn-sm')
-              .onClick(() => ctx.hero.count.update(v => v - 1)),
+              .onClick(() => ctx.hero.count(v => v - 1)),
             Button('reset').className('sc-btn sc-btn-sm')
-              .onClick(() => ctx.hero.count.set(0)),
+              .onClick(() => ctx.hero.count(0)),
           ).className('sc-action-row').style({ alignItems: 'center' }),
         ).gap(12).height('200px').justifyContent('space-around'),
-        Paragraph().text(() => ctx.hero.countNote.get()).className('sc-counter-note'),
+        Paragraph().text(() => ctx.hero.countNote()).className('sc-counter-note'),
       ).className('sc-hero-demo'),
     ).className('sc-hero').padding('12px'),
   ).style({ position: 'relative', overflow: 'hidden' });
@@ -773,31 +777,31 @@ function PrinciplesSection() {
         VStack(
           Title('Small rules. Direct output.').className('sc-section-title').level(2),
           Paragraph(
-            'Feather has one rule that governs everything. Reactive values are only reactive when passed as functions. Everything else flows from that single constraint.',
+            'Feather has one rule that governs everything. Functions define reactivity. Read reactive values inside functions, and the binding stays live and explicit.',
           ).className('sc-section-desc'),
         ).className('sc-principles-intro').justifyContent('space-evenly').minHeight('320px'),
       ).className('sc-reveal'),
       Box(
-        RuleCard('01', 'Functions make it live.', 'Wrap any reactive read in a function and the binding stays hot. Skip the function and the value is captured once.',
+        RuleCard('01', 'Functions make it live.', 'Wrap reactive reads in functions and the binding stays hot. Skip the function and the current value gets captured once.',
           [
             Span('const').className('ck'), ' count = ', Span('signal').className('cf'), '(0);\n',
             Span('// ✓ live:').className('cc'), '\n',
-            'Text(', Span('() => count.get()').className('cs'), ')\n',
+            'Text(', Span('() => count()').className('cs'), ')\n',
             Span('// ✗ dead:').className('cc'), '\n',
-            'Text(', Span('count.get()').className('cv'), ')',
+            'Text(', Span('count()').className('cv'), ')',
           ],
         ),
-        RuleCard('02', 'Signals hold state.', 'A signal is a reactive container. Read with get(), write with set(). Observers are notified only when the value actually changes.',
+        RuleCard('02', 'Signals are callable.', 'Call a signal with no args to read, with a value to set, or with an updater function to transform from the previous value.',
           [
             Span('const').className('ck'), ' name = ', Span('signal').className('cf'), '(', Span("'Feather'").className('cs'), ');\n',
-            'name.', Span('set').className('cf'), '(', Span("'Updated'").className('cs'), ');\n',
-            'name.', Span('update').className('cf'), '(v => v + ', Span("'!'").className('cs'), ');',
+            'name(', Span("'Updated'").className('cs'), ');\n',
+            'name(v => v + ', Span("'!'").className('cs'), ');',
           ],
         ),
         RuleCard('03', 'Computed derives state.', 'Computed values re-run only when their dependencies change. They memoize the last result and skip unnecessary work.',
           [
             Span('const').className('ck'), ' full = ', Span('computed').className('cf'), '(\n',
-            '  () => ', Span('`${first.get()} ${last.get()}`').className('cs'), '\n',
+            '  () => ', Span('`${first()} ${last()}`').className('cs'), '\n',
             ');',
           ],
         ),
@@ -840,15 +844,15 @@ function ReactivitySection(ctx) {
               Span('const').className('ck'), ' ', Span('message').className('cv'), ' = ', Span('signal').className('cf'), '(', Span("''").className('cs'), ');\n\n',
               Span('// computed() derives without side-effects.').className('cc'), '\n',
               Span('const').className('ck'), ' ', Span('charCount').className('cv'), ' = ', Span('computed').className('cf'), '(\n',
-              '  () => ', Span('message').className('cv'), '.', Span('get').className('cf'), '().length\n',
+              '  () => ', Span('message').className('cv'), '().length\n',
               ');\n\n',
               Span('// Bindings stay live because').className('cc'), '\n',
-              Span("// they're wrapped in arrow functions.").className('cc'), '\n\n',
+              Span("// the reactive read stays inside a function.").className('cc'), '\n\n',
               Span('Input').className('cf'), '()\n',
-              '  .', Span('onInput').className('cf'), '((e) => ', Span('message').className('cv'), '.', Span('set').className('cf'), '(e.target.value))\n',
+              '  .', Span('onInput').className('cf'), '((e) => ', Span('message').className('cv'), '(e.target.value))\n',
               '  .', Span('placeholder').className('cf'), '(', Span("'type anything…'").className('cs'), ');\n\n',
               Span('Paragraph').className('cf'), '()\n',
-              '  .', Span('text').className('cf'), '(() => ', Span('charCount').className('cv'), '.', Span('get').className('cf'), '() + ', Span("' chars'").className('cs'), ');',
+              '  .', Span('text').className('cf'), '(() => ', Span('charCount').className('cv'), '() + ', Span("' chars'").className('cs'), ');',
             ),
           ),
         ).className('sc-code-pane sc-reveal d1'),
@@ -861,28 +865,28 @@ function ReactivitySection(ctx) {
               .placeholder('type anything…')
               .attr('maxlength', '120')
               .className('sc-live-input')
-              .onInput((e) => ctx.reactive.message.set(e.target.value)),
+              .onInput((e) => ctx.reactive.message(e.target.value)),
           ).className('sc-live-card').id('sc-card-input'),
           Box(
             Paragraph('computed — preview').className('sc-live-label'),
             Paragraph()
-              .text(() => ctx.reactive.message.get() || 'Start typing…')
+              .text(() => ctx.reactive.message() || 'Start typing…')
               .className('sc-live-preview')
               .style(() => ({
-                color: ctx.reactive.message.get() ? 'var(--ink)' : 'var(--ink-ghost)',
-                fontStyle: ctx.reactive.message.get() ? 'normal' : 'italic',
+                color: ctx.reactive.message() ? 'var(--ink)' : 'var(--ink-ghost)',
+                fontStyle: ctx.reactive.message() ? 'normal' : 'italic',
               })),
           ).className('sc-live-card').id('sc-card-preview'),
           HStack(
             Box(
               Paragraph('computed — chars').className('sc-live-label'),
-              Span(() => String(ctx.reactive.charCount.get()))
-                .className(() => `sc-live-value${ctx.reactive.flashChars.get() ? ' flash' : ''}`),
+              Span(() => String(ctx.reactive.charCount()))
+                .className(() => `sc-live-value${ctx.reactive.flashChars() ? ' flash' : ''}`),
             ).className('sc-live-card').id('sc-card-chars').style({ flex: '1 1 220px' }),
             Box(
               Paragraph('computed — words').className('sc-live-label'),
-              Span(() => String(ctx.reactive.wordCount.get()))
-                .className(() => `sc-live-value${ctx.reactive.flashWords.get() ? ' flash' : ''}`),
+              Span(() => String(ctx.reactive.wordCount()))
+                .className(() => `sc-live-value${ctx.reactive.flashWords() ? ' flash' : ''}`),
             ).className('sc-live-card').id('sc-card-words').style({ flex: '1 1 220px' }),
           ).style({
             flexWrap: 'wrap',
@@ -908,22 +912,22 @@ function DerivedSection(ctx) {
       Box(
         Box(
           Paragraph('source signal').className('sc-derived-label'),
-          Span(() => String(ctx.derived.a.get())).className('sc-derived-num').style({ color: '#9b8fff' }),
+          Span(() => String(ctx.derived.a())).className('sc-derived-num').style({ color: '#9b8fff' }),
           Paragraph('const a = signal(5)').className('sc-derived-formula'),
           HStack(
-            Button('+1').className('sc-btn sc-btn-sm').onClick(() => ctx.derived.a.update(v => v + 1)),
-            Button('-1').className('sc-btn sc-btn-sm').onClick(() => ctx.derived.a.update(v => v - 1)),
+            Button('+1').className('sc-btn sc-btn-sm').onClick(() => ctx.derived.a(v => v + 1)),
+            Button('-1').className('sc-btn sc-btn-sm').onClick(() => ctx.derived.a(v => v - 1)),
           ).className('sc-derived-controls sc-action-row'),
         ).className('sc-derived-cell'),
         Box(
           Box(Span('→ ', { class: 'arr' }), 'computed × 2').className('sc-derived-label'),
-          Span(() => String(ctx.derived.b.get())).className('sc-derived-num').style({ color: 'var(--accent)' }),
-          Paragraph(() => `computed(() => a.get() * 2)`).className('sc-derived-formula'),
+          Span(() => String(ctx.derived.b())).className('sc-derived-num').style({ color: 'var(--accent)' }),
+          Paragraph(() => `computed(() => a() * 2)`).className('sc-derived-formula'),
         ).className('sc-derived-cell'),
         Box(
           Box(Span('→→ ', { class: 'arr' }), 'computed + 100').className('sc-derived-label'),
-          Span(() => String(ctx.derived.c.get())).className('sc-derived-num').style({ color: '#ff6b8a' }),
-          Paragraph(() => `computed(() => b.get() + 100)`).className('sc-derived-formula'),
+          Span(() => String(ctx.derived.c())).className('sc-derived-num').style({ color: '#ff6b8a' }),
+          Paragraph(() => `computed(() => b() + 100)`).className('sc-derived-formula'),
         ).className('sc-derived-cell'),
       ).className('sc-derived-grid sc-reveal d1'),
     ).className('sc-section'),
@@ -943,36 +947,36 @@ function FlowSection(ctx) {
           // Signal node
           Box(
             Paragraph('signal').className('sc-flow-kind s'),
-            Span(() => String(ctx.flow.count.get())).className('sc-flow-val').style({ color: '#9b8fff' }),
+            Span(() => String(ctx.flow.count())).className('sc-flow-val').style({ color: '#9b8fff' }),
             Paragraph('count').className('sc-flow-name'),
-          ).className(() => `sc-flow-node sn${ctx.flow.pulseSignal.get() ? ' pulse-s' : ''}`),
+          ).className(() => `sc-flow-node sn${ctx.flow.pulseSignal() ? ' pulse-s' : ''}`),
           // Arrow 1
           Box(
             Box(
               Box().className('sc-particle').id('sc-p1'),
-            ).className(() => `sc-arrow-line${ctx.flow.lit1.get() ? ' lit' : ''}`),
+            ).className(() => `sc-arrow-line${ctx.flow.lit1() ? ' lit' : ''}`),
           ).className('sc-arrow'),
           // Computed node
           Box(
             Paragraph('computed').className('sc-flow-kind c'),
-            Span(() => String(ctx.flow.doubled.get())).className('sc-flow-val').style({ color: 'var(--accent)' }),
+            Span(() => String(ctx.flow.doubled())).className('sc-flow-val').style({ color: 'var(--accent)' }),
             Paragraph('doubled').className('sc-flow-name'),
-          ).className(() => `sc-flow-node cn${ctx.flow.pulseComputed.get() ? ' pulse' : ''}`),
+          ).className(() => `sc-flow-node cn${ctx.flow.pulseComputed() ? ' pulse' : ''}`),
           // Arrow 2
           Box(
             Box(
               Box().className('sc-particle').id('sc-p2'),
-            ).className(() => `sc-arrow-line${ctx.flow.lit2.get() ? ' lit' : ''}`),
+            ).className(() => `sc-arrow-line${ctx.flow.lit2() ? ' lit' : ''}`),
           ).className('sc-arrow'),
           // Effect node
           Box(
             Paragraph('effect').className('sc-flow-kind e'),
-            Span(() => ctx.flow.effectLabel.get()).className('sc-flow-val').style({ color: 'var(--accent-3)' }),
+            Span(() => ctx.flow.effectLabel()).className('sc-flow-val').style({ color: 'var(--accent-3)' }),
             Paragraph('side-effect').className('sc-flow-name'),
-          ).className(() => `sc-flow-node en${ctx.flow.pulseEffect.get() ? ' pulse-e' : ''}`),
+          ).className(() => `sc-flow-node en${ctx.flow.pulseEffect() ? ' pulse-e' : ''}`),
         ).className('sc-flow-grid'),
         HStack(
-          Button('trigger signal.set()').className('sc-btn sc-btn-accent sc-btn-sm').onClick(() => ctx.flow.trigger()),
+          Button('trigger count(v => v + 1)').className('sc-btn sc-btn-accent sc-btn-sm').onClick(() => ctx.flow.trigger()),
           Button('reset').className('sc-btn sc-btn-sm').onClick(() => ctx.flow.reset()),
         ).style({ justifyContent: 'space-between' }).className('sc-flow-footer sc-action-row'),
       ).className('sc-flow-canvas sc-reveal d1').margin({ top: '48px' }),
@@ -995,22 +999,22 @@ function ThemeSection(ctx) {
             Button(
               Box().className('sw').style({ background: p.swatch, width: '12px', height: '12px', borderRadius: '50%', flexShrink: '0' }),
               p.label,
-            ).className(() => `sc-palette-btn${ctx.theme.selected.get() === p.id ? ' active' : ''}`).onClick(() => ctx.theme.selected.set(p.id)),
+            ).className(() => `sc-palette-btn${ctx.theme.selected() === p.id ? ' active' : ''}`).onClick(() => ctx.theme.selected(p.id)),
           ),
         ).className('sc-palette-list'),
         // Theme preview
         Box(
-          Paragraph().text(() => ctx.theme.active.get().snippet).className('sc-theme-pname').style(() => ({ color: ctx.theme.active.get().btnColor })),
-          Subtitle().level(3).text(() => ctx.theme.active.get().label).className('sc-theme-title').style(() => ({ color: ctx.theme.active.get().titleColor })),
-          Paragraph('The structure is identical across every palette. Only the token values change. That\'s what fine-grained reactivity enables.').className('sc-theme-text').style(() => ({ color: ctx.theme.active.get().textColor })),
+          Paragraph().text(() => ctx.theme.active().snippet).className('sc-theme-pname').style(() => ({ color: ctx.theme.active().btnColor })),
+          Subtitle().level(3).text(() => ctx.theme.active().label).className('sc-theme-title').style(() => ({ color: ctx.theme.active().titleColor })),
+          Paragraph('The structure is identical across every palette. Only the token values change. That\'s what fine-grained reactivity enables.').className('sc-theme-text').style(() => ({ color: ctx.theme.active().textColor })),
           Box('Primary action').className('sc-theme-btn').style(() => ({
-            background: ctx.theme.active.get().btnBg,
-            borderColor: ctx.theme.active.get().btnBorder,
-            color: ctx.theme.active.get().btnColor,
+            background: ctx.theme.active().btnBg,
+            borderColor: ctx.theme.active().btnBorder,
+            color: ctx.theme.active().btnColor,
           })),
         ).className('sc-theme-preview').style(() => ({
-          background: ctx.theme.active.get().bg,
-          borderColor: ctx.theme.active.get().border,
+          background: ctx.theme.active().bg,
+          borderColor: ctx.theme.active().border,
         })),
       ).className('sc-theme-canvas sc-reveal d1'),
     ).className('sc-section'),
@@ -1032,12 +1036,12 @@ function FinaleSection(ctx) {
     Paragraph('State is explicit. Bindings are obvious. DOM output stays close to the code that defines it.').className('sc-finale-sub'),
     HStack(
       Button('Back to top').className('sc-btn sc-btn-accent sc-btn-lg')
-        .onClick(() => window.scrollTo({ top: 0, behavior: 'smooth' })),
+        .onClick(() => scrollToTop()),
       Button('Reset all demos').className('sc-btn sc-btn-lg')
         .onClick(() => ctx.actions.resetAll()),
     ).gap(12).style({ justifyContent: 'center', flexWrap: 'wrap', position: 'relative', zIndex: '1' }),
     Paragraph()
-      .text(() => `count ${ctx.hero.count.get()} · chars ${ctx.reactive.charCount.get()} · source ${ctx.derived.a.get()} · palette ${ctx.theme.active.get().label}`)
+      .text(() => `count ${ctx.hero.count()} · chars ${ctx.reactive.charCount()} · source ${ctx.derived.a()} · palette ${ctx.theme.active().label}`)
       .className('sc-finale-status'),
   ).className('sc-finale sc-reveal').id('finale');
 }
@@ -1054,28 +1058,28 @@ const ShowcasePage = page({
     const heroCount = signal(0);
     const heroBump = signal(false);
     const heroCountNote = computed(() => {
-      const v = heroCount.get();
+      const v = heroCount();
       if (v === 0) return 'Nothing changed yet.';
       if (v === 1) return 'One signal changed.';
       if (v < 0) return `${Math.abs(v)} below zero.`;
-      return `${v} direct updates.`;
+      return `${v} direct signal calls.`;
     });
 
     // Reactive input
     const message = signal('');
-    const charCount = computed(() => message.get().length);
-    const wordCount = computed(() => message.get().trim() ? message.get().trim().split(/\s+/).length : 0);
+    const charCount = computed(() => message().length);
+    const wordCount = computed(() => message().trim() ? message().trim().split(/\s+/).length : 0);
     const flashChars = signal(false);
     const flashWords = signal(false);
 
     // Derived chain
     const derivedA = signal(5);
-    const derivedB = computed(() => derivedA.get() * 2);
-    const derivedC = computed(() => derivedB.get() + 100);
+    const derivedB = computed(() => derivedA() * 2);
+    const derivedC = computed(() => derivedB() + 100);
 
     // Signal flow
     const flowCount = signal(0);
-    const flowDoubled = computed(() => flowCount.get() * 2);
+    const flowDoubled = computed(() => flowCount() * 2);
     const flowEffectLabel = signal('idle');
     const flowPulseSignal = signal(false);
     const flowPulseComputed = signal(false);
@@ -1084,27 +1088,27 @@ const ShowcasePage = page({
     const flowLit2 = signal(false);
 
     const triggerFlow = () => {
-      flowCount.update(v => v + 1);
-      flowPulseSignal.set(true);
-      ctx.timeout(() => flowPulseSignal.set(false), 400, 'lifetime');
+      flowCount(v => v + 1);
+      flowPulseSignal(true);
+      ctx.timeout(() => flowPulseSignal(false), 400, 'lifetime');
 
       ctx.timeout(() => {
-        flowLit1.set(true);
+        flowLit1(true);
         const p1 = document.getElementById('sc-p1');
         if (p1) { p1.style.animation = 'none'; p1.offsetHeight; p1.style.animation = 'sc-particle 0.4s linear forwards'; }
         ctx.timeout(() => {
-          flowLit1.set(false);
-          flowPulseComputed.set(true);
-          ctx.timeout(() => flowPulseComputed.set(false), 400, 'lifetime');
+          flowLit1(false);
+          flowPulseComputed(true);
+          ctx.timeout(() => flowPulseComputed(false), 400, 'lifetime');
           ctx.timeout(() => {
-            flowLit2.set(true);
+            flowLit2(true);
             const p2 = document.getElementById('sc-p2');
             if (p2) { p2.style.animation = 'none'; p2.offsetHeight; p2.style.animation = 'sc-particle 0.4s linear forwards'; }
             ctx.timeout(() => {
-              flowLit2.set(false);
-              flowEffectLabel.set(`ran ×${flowCount.get()}`);
-              flowPulseEffect.set(true);
-              ctx.timeout(() => flowPulseEffect.set(false), 400, 'lifetime');
+              flowLit2(false);
+              flowEffectLabel(`ran ×${flowCount()}`);
+              flowPulseEffect(true);
+              ctx.timeout(() => flowPulseEffect(false), 400, 'lifetime');
             }, 420, 'lifetime');
           }, 420, 'lifetime');
         }, 420, 'lifetime');
@@ -1112,22 +1116,22 @@ const ShowcasePage = page({
     };
 
     const resetFlow = () => {
-      flowCount.set(0);
-      flowEffectLabel.set('idle');
+      flowCount(0);
+      flowEffectLabel('idle');
     };
 
     // Theme
     const selectedPalette = signal('slate');
-    const activePalette = computed(() => PALETTES.find(p => p.id === selectedPalette.get()) || PALETTES[0]);
+    const activePalette = computed(() => PALETTES.find(p => p.id === selectedPalette()) || PALETTES[0]);
 
     // Reset all
     const resetAll = () => {
-      heroCount.set(0);
-      message.set('');
-      derivedA.set(5);
+      heroCount(0);
+      message('');
+      derivedA(5);
       resetFlow();
-      selectedPalette.set('slate');
-      window.scrollTo({ top: 0, behavior: 'smooth' });
+      selectedPalette('slate');
+      scrollToTop();
     };
 
     return setupState(
@@ -1198,18 +1202,18 @@ const ShowcasePage = page({
 
     // Hero count bump effect
     ctx.hero.count.subscribe(() => {
-      ctx.hero.bump.set(true);
-      ctx.timeout(() => ctx.hero.bump.set(false), 200, 'lifetime');
+      ctx.hero.bump(true);
+      ctx.timeout(() => ctx.hero.bump(false), 200, 'lifetime');
     });
 
     // Flash computed values on input
     ctx.reactive.charCount.subscribe(() => {
-      ctx.reactive.flashChars.set(true);
-      ctx.timeout(() => ctx.reactive.flashChars.set(false), 200, 'lifetime');
+      ctx.reactive.flashChars(true);
+      ctx.timeout(() => ctx.reactive.flashChars(false), 200, 'lifetime');
     });
     ctx.reactive.wordCount.subscribe(() => {
-      ctx.reactive.flashWords.set(true);
-      ctx.timeout(() => ctx.reactive.flashWords.set(false), 200, 'lifetime');
+      ctx.reactive.flashWords(true);
+      ctx.timeout(() => ctx.reactive.flashWords(false), 200, 'lifetime');
     });
 
     // Scroll reveal
@@ -1251,7 +1255,7 @@ const ShowcasePage = page({
       ),
 
       // SECTIONS
-      HeroSection(ctx),
+      HeroSection(ctx).id('sc-top'),
       Box(Box(Divider()).className('sc-divider')),
       PrinciplesSection(),
       Box(Box(Divider()).className('sc-divider')),
