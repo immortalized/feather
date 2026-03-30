@@ -1,6 +1,6 @@
 # Feather
 
-[![Version](https://img.shields.io/badge/version-v0.0.0-0f172a?style=for-the-badge)](https://github.com/immortalized/feather/releases)
+[![Version](https://img.shields.io/badge/version-v2.0.0-0f172a?style=for-the-badge)](https://github.com/immortalized/feather/releases)
 
 Feather is a runtime-first UI engine for building explicit interfaces with fine-grained reactivity, fluent DOM modifiers, and no template layer.
 
